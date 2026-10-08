@@ -1,0 +1,121 @@
+Atari 2600 core for Game Bub (gamebub-2600)
+https://github.com/Wenwald/gamebub-2600
+
+Copyright (c) 2026 Mark Schlosser (Wenwald)
+
+Source files: MIT (LICENSE). The bitstream (2600_rev4.bit) as a whole:
+GPL-2.0 (COPYING.GPL-2.0), as it includes Stella-derived code (below).
+Unofficial port, not endorsed by the authors below. Source: this
+repository and its submodules at the pinned commits.
+
+--------------------------------------------------------------------------
+Atari7800_MiSTer (2600 mode: CPU, TIA, RIOT, paddle timing, cartridge
+bank-switching and detection, video, palette data)
+https://github.com/MiSTer-devel/Atari7800_MiSTer
+commit 0dc8ad2e3ff724af57ba84c913e035a4c97733e8
+
+MIT License
+
+Copyright (c) 2019-2026 Jamie Blanks
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+--------------------------------------------------------------------------
+Stella (bank-switching detection in Atari7800_MiSTer rtl/detect2600.sv,
+which contains Stella's CartDetector source and its Verilog translation)
+https://github.com/stella-emu/stella
+
+Copyright (c) 1995-2026 by Bradford W. Mott, Stephen Anthony and the
+Stella Team
+Licensed under the GNU General Public License version 2 (see
+COPYING.GPL-2.0).
+
+--------------------------------------------------------------------------
+CRC-32 function in Atari7800_MiSTer rtl/detect2600.sv
+
+Copyright (C) 1999-2008 Easics NV.
+This source file may be used and distributed without restriction
+provided that this copyright statement is not removed from the file
+and that any derivative work contains the original copyright notice
+and the associated disclaimer.
+
+THIS SOURCE FILE IS PROVIDED "AS IS" AND WITHOUT ANY EXPRESS
+OR IMPLIED WARRANTIES, INCLUDING, WITHOUT LIMITATION, THE IMPLIED
+WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR A PARTICULAR PURPOSE.
+
+--------------------------------------------------------------------------
+Game Bub Framework (used unmodified)
+https://github.com/gamebub/framework
+commit db9d3b0e7989db4a8edc66e47b843097d71f078c
+
+Licensed under the CERN Open Hardware Licence Version 2 - Weakly
+Reciprocal (CERN-OHL-W-2.0), as granted in the framework's LICENSE file for
+unmodified use: https://ohwr.org/cern_ohl_w_v2.txt
+The complete source of the framework is available at the URL and commit
+above.
+
+--------------------------------------------------------------------------
+HDMI transmitter (part of the Game Bub Framework, verilog/hdmi)
+https://github.com/hdl-util/hdmi
+
+Copyright (c) 2019 Sameer Puri
+Dual-licensed under MIT or Apache-2.0; used here under the MIT License:
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+--------------------------------------------------------------------------
+PicoRV32 (part of the Game Bub Framework, verilog/picorv32.v)
+
+Copyright (C) 2015  Claire Xenia Wolf <claire@yosyshq.com>
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+--------------------------------------------------------------------------
+AMD Clocking Wizard output (part of the Game Bub Framework,
+verilog/handheld/clk_wiz_hdmi.v)
+
+(c) Copyright 2017-2018, 2023 Advanced Micro Devices, Inc. All rights
+reserved. Included in the bitstream as permitted by the AMD Vivado End User
+License Agreement, for programming AMD/Xilinx devices only.

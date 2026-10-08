@@ -1,0 +1,205 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Mark Schlosser
+#
+# Changes to Atari7800_MiSTer (external/, pinned 0dc8ad2e) for the 2600-only
+# core. Applied by scripts/prepare_rtl.py to a copy in build/upstream/; the
+# submodule itself stays untouched. The patched file keeps its MIT notice.
+#
+# rtl/cart2600.sv:
+#   - The NO_ARM_MAPPER guard now also covers the ARM front ends (stream
+#     tables, RAM init, table writeback, ARM audio, DPC+, CDF, BUS), which
+#     upstream instantiates outside it. With it set, those three schemes show
+#     the "Out of Order" screen, as upstream's README describes for ARM games.
+#   - 32-in-1: the game counter also clears when a new image starts loading,
+#     so the first game is game 0 even when the scheme is already selected
+#     (manually) during the load. Upstream cleared it only while another
+#     scheme was selected.
+#
+# rtl/TIA.sv, rtl/banks2600.sv, rtl/paddles.sv (Vivado 2026.1 synthesis, no
+# behaviour change):
+#   - TIA outputs i_out, col, lum, paddle_read, and paddles.sv's
+#     paddle_select.select and paddle_timer.charged, become `output logic`:
+#     they are assigned in always blocks, and an untyped output port is a
+#     net, which Vivado rejects (Quartus and Verilator accept it).
+#   - mapper_AR: header_array.sum() (an array reduction method Vivado
+#     synthesis does not support) written out as the 8-bit sum of its eight
+#     elements, which is what .sum() returns for 8-bit elements.
+#
+--- a/rtl/cart2600.sv
++++ b/rtl/cart2600.sv
+@@ -145,8 +145,14 @@
+ 
+ 	assign rom_mask = rom_size[18:0] - 1'd1;
+ 	assign rom_read = mapper == BANKAR ? ar_read : ~address_change;
++`ifdef NO_ARM_MAPPER
++	// Without the ARM, every Harmony/Melody ARM scheme is unsupported.
++	wire is_bad_game = mapper == BANKELF || mapper == BANKDPCP ||
++		mapper == BANKCDF || mapper == BANKBUS;
++`else
+ 	wire is_bad_game = mapper == BANKELF ||
+ 		(mapper == BANKBUS && mapper_revision == 3'd0);
++`endif
+ 
+ 	// Handle unsupportable ARM mappers :(
+ 	spram #(
+@@ -586,6 +592,7 @@
+ 	assign table_pointer_write_value = mapper == BANKCDF ?
+ 		cdf_pointer_update_value : bus_pointer_update_value;
+ 
++`ifndef NO_ARM_MAPPER
+ 	arm_mapper_tables stream_tables (
+ 		.clk_sys                (clk),
+ 		.family                 (table_family),
+@@ -865,6 +872,83 @@
+ 		(mapper == BANKCDF ? cdf_call_stack : bus_call_stack);
+ 	assign arm_call_thumb = mapper == BANKDPCP ? dpc_call_thumb :
+ 		(mapper == BANKCDF ? cdf_call_thumb : bus_call_thumb);
++
++`else
++	// No ARM front ends: nothing initialises, streams, plays or calls, and
++	// the three ARM schemes show the unsupported screen (is_bad_game).
++	assign mapper_init_busy = 1'b0;
++	assign mapper_dma_request = 1'b0;
++	assign mapper_dma_fill = 1'b0;
++	assign mapper_dma_source = 25'd0;
++	assign mapper_dma_dest = 17'd0;
++	assign mapper_dma_count = 18'd0;
++	assign mapper_dma_value = 8'd0;
++	assign init_ram_en = 1'b0;
++	assign init_ram_addr = 17'd0;
++	assign mapper_wb_idle = 1'b1;
++	assign mapper_wb_en = 1'b0;
++	assign mapper_wb_write = 1'b0;
++	assign mapper_wb_addr = 15'd0;
++	assign mapper_wb_wdata = 32'd0;
++	assign mapper_wb_wstrb = 4'd0;
++	assign audio_ram_en = 1'b0;
++	assign audio_ram_addr = 17'd0;
++	assign arm_audio_amplitude = 8'd0;
++	assign dpc_service_request_raw = 1'b0;
++	assign dpc_service_fill = 1'b0;
++	assign dpc_service_source = 19'd0;
++	assign dpc_service_dest = 15'd0;
++	assign dpc_service_count = 8'd0;
++	assign dpc_service_value = 8'd0;
++	assign bus_stuff_valid_raw = 1'b0;
++	assign bus_stuff_data_raw = 8'd0;
++	assign arm_call_request = 1'b0;
++	assign arm_call_entry = 32'd0;
++	assign arm_call_stack = 32'd0;
++	assign arm_call_thumb = 1'b0;
++	assign arm_audio_counter0 = 32'd0;
++	assign arm_audio_counter1 = 32'd0;
++	assign arm_audio_counter2 = 32'd0;
++	assign arm_audio_frequency0 = 32'd0;
++	assign arm_audio_frequency1 = 32'd0;
++	assign arm_audio_frequency2 = 32'd0;
++	assign arm_sample_request = 1'b0;
++	assign arm_sample_addr = 25'd0;
++	assign cdf_table_index = 6'd0;
++	assign cdf_pointer_update = 1'b0;
++	assign cdf_pointer_update_index = 6'd0;
++	assign cdf_pointer_update_value = 32'd0;
++	assign bus_pointer_index = 6'd0;
++	assign bus_increment_index = 6'd0;
++	assign bus_pointer_update = 1'b0;
++	assign bus_pointer_update_index = 6'd0;
++	assign bus_pointer_update_value = 32'd0;
++	assign bus_map_update = 1'b0;
++
++	assign direct_do[BANKDPCP] = bg_data;
++	assign flags_out[BANKDPCP] = 16'd1;
++	assign out_en[BANKDPCP]    = 8'hFF;
++	assign ram_sel[BANKDPCP]   = 1'b0;
++	assign ram_rw[BANKDPCP]    = 1'b1;
++	assign ram_a[BANKDPCP]     = '0;
++	assign rom_addr[BANKDPCP]  = '0;
++
++	assign direct_do[BANKCDF]  = bg_data;
++	assign flags_out[BANKCDF]  = 16'd1;
++	assign out_en[BANKCDF]     = 8'hFF;
++	assign ram_sel[BANKCDF]    = 1'b0;
++	assign ram_rw[BANKCDF]     = 1'b1;
++	assign ram_a[BANKCDF]      = '0;
++	assign rom_addr[BANKCDF]   = '0;
++
++	assign direct_do[BANKBUS]  = bg_data;
++	assign flags_out[BANKBUS]  = 16'd1;
++	assign out_en[BANKBUS]     = 8'hFF;
++	assign ram_sel[BANKBUS]    = 1'b0;
++	assign ram_rw[BANKBUS]     = 1'b1;
++	assign ram_a[BANKBUS]      = '0;
++	assign rom_addr[BANKBUS]   = '0;
++`endif
+ 
+ 	// ELF is not an ARM7 mapper; retain the explicit unsupported screen.
+ 	assign direct_do[BANKELF]     = bg_data;
+@@ -1182,7 +1266,7 @@
+ 		.ram_rw     (ram_rw[BANK32]),
+ 		.ram_a      (ram_a[BANK32]),
+ 		.rom_a      (rom_addr[BANK32]),
+-		.cold_reset (mapper != BANK32)
++		.cold_reset (mapper != BANK32 || load_start)
+ 	);
+ 
+ 	mapper_AR mapper_AR
+--- a/rtl/TIA.sv
++++ b/rtl/TIA.sv
+@@ -1730,13 +1730,13 @@
+ 	output logic [7:0] d_out,
+ 	output logic [7:0] d_out_oe, // Which of D7:D0 the chip is actually driving
+ 	input  [3:0]    i,     // On real hardware, these would be ADC pins. i0..3
+-	output [3:0]    i_out,
++	output logic [3:0] i_out,
+ 	input           i4,
+ 	input           i5,
+ 	output [3:0]    aud0,
+ 	output [3:0]    aud1,
+-	output [3:0]    col,
+-	output [2:0]    lum,
++	output logic [3:0] col,
++	output logic [2:0] lum,
+ 	output          BLK_n,
+ 	output          sync,
+ 	input           cs0_n,
+@@ -1769,7 +1769,7 @@
+ 	output          is_pal,
+ 	output          is_f1,
+ 	input           stabilize,
+-	output  [3:0]   paddle_read // Helper to let us autodetect paddles
++	output logic [3:0] paddle_read // Helper to let us autodetect paddles
+ );
+ 
+ logic [7:0] wreg[64]; // Write registers. Only 44 are used.
+--- a/rtl/banks2600.sv
++++ b/rtl/banks2600.sv
+@@ -1097,7 +1097,8 @@
+ 						state_next <= AR_LOAD_HEADER;
+ 					end else begin
+ 						header_a <= 0;
+-						header_array[4] <= 8'h55 - header_array.sum();
++						header_array[4] <= 8'h55 - (header_array[0] + header_array[1] + header_array[2] + header_array[3] +
++							header_array[4] + header_array[5] + header_array[6] + header_array[7]);
+ 						state_next <= AR_LOAD_BLOCK_BYTE;
+ 					end
+ 					state <= AR_FETCH;
+--- a/rtl/paddles.sv
++++ b/rtl/paddles.sv
+@@ -5,7 +5,7 @@
+ (
+ 	input       clk,
+ 	input [7:0] value,
+-	output      select
++	output logic select
+ );
+ 	logic [7:0] last_value;
+ 	always_ff @(posedge clk) begin
+@@ -180,7 +180,7 @@
+ 	input [9:0] kohms,
+ 	input clear,
+ 	input read,
+-	output charged,
++	output logic charged,
+ 	output logic [33:0] difference
+ );
+ 

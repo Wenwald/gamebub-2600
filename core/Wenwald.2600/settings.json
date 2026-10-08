@@ -1,0 +1,80 @@
+{
+  "settings": [
+    {
+      "id": 0,
+      "label": "Reset",
+      "type": "action",
+      "address": "0x00002000",
+      "value": "0x1"
+    },
+    {
+      "id": 1,
+      "label": "Left Difficulty",
+      "type": "list",
+      "address": "0x00001000",
+      "default": "0x0",
+      "items": [
+        { "label": "B", "value": "0x0" },
+        { "label": "A", "value": "0x1" }
+      ]
+    },
+    {
+      "id": 2,
+      "label": "Right Difficulty",
+      "type": "list",
+      "address": "0x00001004",
+      "default": "0x0",
+      "items": [
+        { "label": "B", "value": "0x0" },
+        { "label": "A", "value": "0x1" }
+      ]
+    },
+    {
+      "id": 3,
+      "label": "TV Type",
+      "type": "list",
+      "address": "0x00001008",
+      "default": "0x1",
+      "items": [
+        { "label": "Colour", "value": "0x1" },
+        { "label": "B&W", "value": "0x0" }
+      ]
+    },
+    {
+      "id": 4,
+      "label": "Bankswitch",
+      "type": "list",
+      "address": "0x0000100C",
+      "default": "0x0",
+      "items": [
+        { "label": "Auto", "value": "0x0" },
+        { "label": "32-in-1", "value": "0xE" },
+        { "label": "MC 2K", "value": "0x1D" },
+        { "label": "MC 4K", "value": "0x1E" },
+        { "label": "MC 8K", "value": "0x1F" },
+        { "label": "CTY", "value": "0x16" },
+        { "label": "FE", "value": "0x3" },
+        { "label": "3F", "value": "0x5" }
+      ]
+    },
+    {
+      "id": 5,
+      "label": "Superchip",
+      "type": "checkbox",
+      "address": "0x00001010",
+      "default": "0x0",
+      "value": "0x1"
+    },
+    {
+      "id": 6,
+      "label": "Controller",
+      "type": "list",
+      "address": "0x00001014",
+      "default": "0x0",
+      "items": [
+        { "label": "Joystick", "value": "0x0" },
+        { "label": "Paddle", "value": "0x1" }
+      ]
+    }
+  ]
+}

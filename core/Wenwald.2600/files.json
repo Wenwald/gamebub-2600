@@ -1,0 +1,14 @@
+{
+  "files": [
+    {
+      "id": 0,
+      "label": "ROM",
+      "extensions": ["a26", "bin"],
+      "optional": false,
+      "read_only": true,
+      "user_selected": true,
+      "address": "0x30000000",
+      "max_size": "0x10000"
+    }
+  ]
+}

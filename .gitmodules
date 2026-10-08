@@ -1,0 +1,6 @@
+[submodule "external/Atari7800_MiSTer"]
+	path = external/Atari7800_MiSTer
+	url = https://github.com/MiSTer-devel/Atari7800_MiSTer.git
+[submodule "framework"]
+	path = framework
+	url = https://github.com/gamebub/framework.git
