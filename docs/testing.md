@@ -66,5 +66,8 @@ make -C sim test-cpu      # 6502 functional test
 python3 sim/suite.py --gamebub paddle   # one group only
 ```
 
-Needs Verilator 5.052+, DASM and the fetched test ROMs
-(`scripts/fetch_test_roms.sh`, see [test-roms.md](test-roms.md)).
+Needs Verilator 5.052+, DASM, the fetched test ROMs
+(`scripts/fetch_test_roms.sh`, see [test-roms.md](test-roms.md)) and the
+full upstream checkout in `ref/` (`scripts/fetch_upstream.sh`: the
+reference console, the real MARIA and upstream's init files; the core
+itself builds from the vendored `third_party/atari7800_mister/`).

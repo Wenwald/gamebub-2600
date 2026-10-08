@@ -6,7 +6,7 @@
 #   make test       build and run (needs scripts/fetch_test_roms.sh klaus6502)
 
 ROOT    := $(abspath ../..)
-CPU_RTL := $(ROOT)/external/Atari7800_MiSTer/rtl/6502
+CPU_RTL := $(ROOT)/third_party/atari7800_mister/rtl/6502
 OBJ     := $(ROOT)/sim/out/obj_sally
 IMAGE   := $(ROOT)/sim/roms/klaus6502/6502_functional_test.bin
 

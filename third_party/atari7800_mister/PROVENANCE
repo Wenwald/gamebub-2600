@@ -1,0 +1,29 @@
+# Files from Atari7800_MiSTer (MIT, see LICENSE; detect2600.sv also
+# contains Stella-derived GPL-2.0 code, see NOTICE), unmodified except
+# the "redacted" ones (data unused by this core, zeroed by
+# scripts/vendor_upstream.py; the line gives the upstream SHA-256).
+# Our changes are in patches/, applied by scripts/prepare_rtl.py to a
+# copy in build/. Written by scripts/vendor_upstream.py; do not edit.
+url https://github.com/MiSTer-devel/Atari7800_MiSTer
+commit 0dc8ad2e3ff724af57ba84c913e035a4c97733e8
+6a74b122d78dc1bdf473bb08f1257e1ab80d2a468e1f286b8cc1988b287f7f0d  LICENSE
+c927eb499b2552ffeb55fb56a27359057ac9153f95f81f7d609bbcfac4f1acf6  rtl/6502/mos6502.sv
+826125f06382bc06416478cb2d87274c350082541ddf1b8d1527dbfb430e39b9  rtl/6502/mos6502_alu.sv
+9e9f95f913f47d1db77fd2960de9ab1db35f83fa483b663b643f0d143d1530d1  rtl/6502/mos6502_ctl.sv
+260640d87ed09aa09c83c9f236dcc234cabddfc4a09769de92d70896ce5dc44c  rtl/6502/mos6502_decode.sv
+3a0a05b14e17a121ff189aa36b0d73b6b286d7d3381dab3106b0a8aee92a464d  rtl/6502/mos6502_dp.sv
+c7ebd1c8b881167ab7698b73066355cde90bd99b3808056e261854d48fb0eb79  rtl/6502/mos6502_pkg.sv
+1674d30983c93ba3e2b83a8253ee8c689c1dfdab196a070502f3821efd953605  rtl/6502/sally.sv
+d0a8355ecf88c8f7b4473ef063ab97c774a59537360663cc37f9b73ae35a502e  rtl/RIOT/M6532.sv
+016b630ca7a5a30e61cef75ae4a043aec24f6a743be86c5cbe07d27e4960e635  rtl/TIA.sv
+425f606ce6e7623bb565659f44f7fd80d88954e8afa0efd2fcc278ca5c866566  rtl/banks2600.sv
+c29d73ea0c74e55fdbc5a31beb37f6824d475943d68ae360d6cf55083b914406  rtl/bram.v
+5d4d6a06c16034fca512f53219be8881f3cd729bc20980b38b4b775d3a8ed44a  rtl/cache_ram.v
+ed8ca7013ddbd6f7b0abe9d6fa2b70c3c42d411aff206fe443726c1fa4a446f7  rtl/cart2600.sv
+1584bbce4beebb497ec33155682eafa4868928853b46e4e777eacf4fd340824b  rtl/detect2600.sv
+e8325049b158040322a931e522333c8116323e5b6bf54828170a743e35c25277  rtl/mapper_fa2.sv
+77f601e03864a372c5e10318923580e685c7d41c18502e09623c5c721eb38f29  rtl/paddles.sv
+8a977c0bcd1d325347d3f54cd4cdb41d230f0d360036013521b21b9c60103055  rtl/palettes/NWARM.hex
+f126f6e32be907f86cd91392f963a9555ca1c3600713efc902530e9cd10fc3a3  rtl/top.sv
+0cf2df3ba5cda17816beb6b155d8553c324a868205d4e0f135545531b41168f8  rtl/video_mux.sv
+redacted 0e246d55bc77eb74610258d7e2dbbf34508aff1580f792a1235e88320416fcfe  rtl/RIOT/M6532.sv

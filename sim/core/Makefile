@@ -25,10 +25,13 @@ FLISTS := $(ROOT)/hdl/core.f maria_full.f
 SRCS := $(addprefix $(ROOT)/,$(shell grep -hv '^//' $(FLISTS)))
 OURS := $(filter $(ROOT)/hdl/%,$(SRCS))
 
-# Upstream sources come from build/upstream: the submodule's rtl/ with
-# patches/*.patch applied. Re-prepared whenever a patch changes.
+# Upstream sources come from build/upstream: the vendored files (over the
+# full upstream rtl/ in ref/, for MARIA and the init files) with
+# patches/*.patch applied. Re-prepared whenever a patch or vendored file
+# changes. ref/ comes from scripts/fetch_upstream.sh.
 UPSTREAM := $(ROOT)/build/upstream
-PREP     := $(UPSTREAM)/.prepared
+PREP     := $(UPSTREAM)/.prepared-sim
+VENDORED := $(wildcard $(ROOT)/third_party/atari7800_mister/PROVENANCE $(ROOT)/third_party/atari7800_mister/rtl/*.* $(ROOT)/third_party/atari7800_mister/rtl/*/*.*)
 
 ROM    ?= sim/roms/jamesor/test-01.a26
 ROMABS := $(if $(filter /%,$(ROM)),$(ROM),$(ROOT)/$(ROM))
@@ -40,8 +43,8 @@ ROM_AW ?= 19
 
 all: $(BIN)
 
-$(PREP): $(wildcard $(ROOT)/patches/*.patch) $(ROOT)/scripts/prepare_rtl.py
-	python3 $(ROOT)/scripts/prepare_rtl.py
+$(PREP): $(wildcard $(ROOT)/patches/*.patch) $(ROOT)/scripts/prepare_rtl.py $(VENDORED)
+	python3 $(ROOT)/scripts/prepare_rtl.py --sim
 
 $(BIN): $(PREP) $(OURS) tb_core.cpp $(FLISTS) ../common/media.h
 	mkdir -p $(OBJ)
