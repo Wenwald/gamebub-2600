@@ -21,6 +21,9 @@ make bitstream package
 
 - `make bitstream` builds the bitstream (a few minutes).
 - `make package` puts the SD-card folder in `build/package/cores/Wenwald.2600/`.
+- `make clean` deletes generated files (keeping `build/release/`);
+  `make clean-release` deletes only `build/release/`; `make distclean`
+  does both and also deletes the downloaded test inputs.
 
 ## Releasing (maintainer)
 

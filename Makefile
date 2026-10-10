@@ -15,6 +15,12 @@
 #                      COPYING.GPL-2.0, SOURCE.txt) and the framework archive;
 #                      only on a tagged X.Y.Z release commit (see below)
 #   make test          simulation suites (core and Game Bub wrapper)
+#   make clean         delete generated files (rtl/, build/ except
+#                      build/release/, out/, sim/out/, built test ROMs)
+#   make clean-release delete build/release/ only (release zips)
+#   make distclean     also build/release/ and the downloads (sim/roms/,
+#                      ref/Atari7800_MiSTer); fetch again with
+#                      scripts/fetch_test_roms.sh and scripts/fetch_upstream.sh
 
 TARGET    := gamebub_rev4
 CORECLASS := atari2600.HandheldAtari2600
@@ -74,4 +80,15 @@ test:
 	$(MAKE) -C sim test
 	$(MAKE) -C sim test-gamebub
 
-.PHONY: prepare check-chisel bitstream package source release test
+# Keeps build/release/ (published zips); distclean removes it too.
+clean:
+	rm -rf rtl out sim/out sim/roms/synthetic
+	@if [ -d build ]; then find build -mindepth 1 -maxdepth 1 ! -name release -exec rm -rf {} +; fi
+
+clean-release:
+	rm -rf build/release
+
+distclean: clean clean-release
+	rm -rf build sim/roms ref/Atari7800_MiSTer
+
+.PHONY: prepare check-chisel bitstream package source release test clean clean-release distclean
