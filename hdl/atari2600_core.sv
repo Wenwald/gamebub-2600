@@ -3,7 +3,7 @@
 //
 // Derived from rtl/top.sv of Atari7800_MiSTer:
 //   Copyright (c) 2019-2026 Jamie Blanks, MIT License (see
-//   external/Atari7800_MiSTer/LICENSE).
+//   third_party/atari7800_mister/LICENSE).
 //
 // Atari 2600 console only: the 2600 path of the upstream 7800 core with the
 // 7800 cartridge, sound chips, BIOS, 7800 RAM, composite output and ARM

@@ -19,6 +19,9 @@ RTLALL := $(ROOT)/rtl/atari2600_all.sv
 OURS := $(filter $(ROOT)/hdl/%,$(addprefix $(ROOT)/,$(shell grep -hv '^//' $(FLISTS))))
 
 UPSTREAM := $(ROOT)/build/upstream
+# --sim: the run needs upstream's init files from ref/ (see sim/core/Makefile).
+PREP     := $(UPSTREAM)/.prepared-sim
+VENDORED := $(wildcard $(ROOT)/third_party/atari7800_mister/PROVENANCE $(ROOT)/third_party/atari7800_mister/rtl/*.* $(ROOT)/third_party/atari7800_mister/rtl/*/*.*)
 
 ROM    ?= sim/roms/jamesor/test-01.a26
 ROMABS := $(if $(filter /%,$(ROM)),$(ROM),$(ROOT)/$(ROM))
@@ -27,10 +30,10 @@ ARGS   ?=
 
 all: $(BIN)
 
-$(RTLALL): $(wildcard $(ROOT)/patches/*.patch) $(ROOT)/scripts/prepare_rtl.py $(OURS) $(FLISTS)
-	python3 $(ROOT)/scripts/prepare_rtl.py
+$(PREP): $(wildcard $(ROOT)/patches/*.patch) $(ROOT)/scripts/prepare_rtl.py $(OURS) $(FLISTS) $(VENDORED)
+	python3 $(ROOT)/scripts/prepare_rtl.py --sim
 
-$(BIN): $(RTLALL) xilinx_stubs.sv tb_gamebub.cpp ../common/media.h
+$(BIN): $(PREP) xilinx_stubs.sv tb_gamebub.cpp ../common/media.h
 	mkdir -p $(OBJ)
 	cd $(ROOT) && verilator --cc --exe --build -j 0 -O3 --top-module atari2600_gamebub \
 		-Wno-fatal -Wno-lint -Wno-style -Wno-TIMESCALEMOD \

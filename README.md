@@ -16,7 +16,8 @@ By Wenwald (Mark Schlosser).
 
 ## Status
 
-Version 1.0.0, for the Game Bub rev 4.
+For the Game Bub rev 4. Current version: see
+[Releases](https://github.com/Wenwald/gamebub-2600/releases).
 
 - **Emulation:** upstream's. In simulation, picture and sound are
   byte-identical to the unmodified Atari7800_MiSTer on every test ROM
@@ -97,7 +98,8 @@ Ideas, roughly in order; no promises or dates:
 ## Building
 
 See [docs/building.md](docs/building.md). In short: Linux, Vivado 2026.1
-(free BASIC licence), then `make bitstream && make package`.
+(free BASIC licence), then `make bitstream && make package`. Releases follow
+the steps in its "Releasing" section.
 
 How it fits together:
 - `hdl/atari2600_core.sv`: the upstream 2600 path (CPU, TIA, RIOT,
@@ -105,8 +107,11 @@ How it fits together:
   MARIA chip, which in 2600 mode only supplies clocks.
 - `hdl/gamebub/`: the Game Bub wrapper (ROM loading, video, audio, inputs,
   menu settings) and the clock generator.
+- `third_party/atari7800_mister/`: the upstream files the core is built
+  from, unmodified except one data table the core never uses, zeroed
+  (`PROVENANCE` names the upstream commit, checksums and the redaction).
 - `patches/atari7800_mister.patch`: our changes to upstream, applied at
-  build time; the upstream submodule stays untouched.
+  build time to a copy; the vendored files stay untouched.
 - `sim/`: Verilator test benches and a self-checking test suite, using our
   own test ROMs plus licence-vetted third-party ones fetched by
   `scripts/fetch_test_roms.sh`.
@@ -116,8 +121,8 @@ their licences: [docs/test-roms.md](docs/test-roms.md).
 
 ## Credits
 
-Emulation by Kitrinx (Jamie Blanks), from Atari7800_MiSTer. Game Bub and
-its framework by Eli Lipsitz.
+Game Bub port by Wenwald (Mark Schlosser). Emulation by Kitrinx (Jamie
+Blanks), from Atari7800_MiSTer. Game Bub and its framework by Eli Lipsitz.
 
 Developed with the help of Claude (Anthropic).
 
@@ -128,4 +133,6 @@ The released bitstream as a whole is distributed under the GPL-2.0 (see
 [COPYING.GPL-2.0](COPYING.GPL-2.0)), because it includes upstream's
 bank-switching detection, which is derived from Stella (GPL-2.0). It also
 contains MIT, CERN-OHL-W-2.0, ISC and other third-party components; see
-[NOTICE](NOTICE) for all of them.
+[NOTICE](NOTICE) for all of them. Each release carries the source: this
+repository at the commit named in the zip's `SOURCE.txt`, plus a framework
+source archive.

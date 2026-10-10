@@ -6,7 +6,10 @@ Copyright (c) 2026 Mark Schlosser (Wenwald)
 Source files: MIT (LICENSE). The bitstream (2600_rev4.bit) as a whole:
 GPL-2.0 (COPYING.GPL-2.0), as it includes Stella-derived code (below).
 Unofficial port, not endorsed by the authors below. Source: this
-repository and its submodules at the pinned commits.
+repository at the commit named in SOURCE.txt (the Atari7800_MiSTer files
+used are vendored in third_party/atari7800_mister/, unmodified except one
+unused data table, see its PROVENANCE), plus the framework source archive
+published with each release (see below).
 
 --------------------------------------------------------------------------
 Atari7800_MiSTer (2600 mode: CPU, TIA, RIOT, paddle timing, cartridge
@@ -68,7 +71,8 @@ Licensed under the CERN Open Hardware Licence Version 2 - Weakly
 Reciprocal (CERN-OHL-W-2.0), as granted in the framework's LICENSE file for
 unmodified use: https://ohwr.org/cern_ohl_w_v2.txt
 The complete source of the framework is available at the URL and commit
-above.
+above. Each release also carries a copy of it (framework source archive),
+minus the AMD file below.
 
 --------------------------------------------------------------------------
 HDMI transmitter (part of the Game Bub Framework, verilog/hdmi)
@@ -118,4 +122,8 @@ verilog/handheld/clk_wiz_hdmi.v)
 
 (c) Copyright 2017-2018, 2023 Advanced Micro Devices, Inc. All rights
 reserved. Included in the bitstream as permitted by the AMD Vivado End User
-License Agreement, for programming AMD/Xilinx devices only.
+License Agreement, for programming AMD/Xilinx devices only. Not included
+in our framework source archive (the EULA permits distributing it only in
+bitstream form or to Vivado licensees): get it from the framework
+repository at the commit above, or regenerate it with Vivado's Clocking
+Wizard (50 MHz in; 27.03125 MHz and 135.15625 MHz out).

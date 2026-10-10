@@ -3,7 +3,7 @@
 //
 // Derived from rtl/Maria/maria.sv and rtl/Maria/control.sv of
 // Atari7800_MiSTer: Copyright (c) 2021-2026 Jamie Blanks, MIT License (see
-// external/Atari7800_MiSTer/LICENSE).
+// third_party/atari7800_mister/LICENSE).
 //
 // What MARIA still does in a 2600 (MEN low, the only state this core uses):
 //   - divides the master clock: mclk0/mclk1 at clk_sys/2, and the TIA's clock

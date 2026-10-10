@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Mark Schlosser
 #
-# Changes to Atari7800_MiSTer (external/, pinned 0dc8ad2e) for the 2600-only
-# core. Applied by scripts/prepare_rtl.py to a copy in build/upstream/; the
-# submodule itself stays untouched. The patched file keeps its MIT notice.
+# Changes to Atari7800_MiSTer (vendored in third_party/atari7800_mister/,
+# upstream 0dc8ad2e) for the 2600-only core. Applied by scripts/prepare_rtl.py
+# to a copy in build/upstream/; the vendored files stay untouched. The
+# patched file keeps its MIT notice.
 #
 # rtl/cart2600.sv:
 #   - The NO_ARM_MAPPER guard now also covers the ARM front ends (stream
