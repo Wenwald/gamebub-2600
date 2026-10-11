@@ -3,7 +3,7 @@
 
 # Atari 2600 core for Game Bub
 
-An Atari 2600 core for the [Game Bub](https://gamebub.net/) handheld, built
+An Atari 2600 core for the FPGA [Game Bub](https://gamebub.net/) handheld, built
 from the 2600 mode of Kitrinx's (Jamie Blanks')
 [Atari7800_MiSTer](https://github.com/MiSTer-devel/Atari7800_MiSTer) core
 and the [Game Bub framework](https://github.com/gamebub/framework).
