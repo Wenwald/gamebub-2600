@@ -25,22 +25,36 @@ make bitstream package
   `make clean-release` deletes only `build/release/`; `make distclean`
   does both and also deletes the downloaded test inputs.
 
+Install as described in the [README](../README.md): copy the
+`Wenwald.2600` folder to `/cores/` on the SD card.
+
 ## Releasing (maintainer)
 
-Between releases `version` in `core/Wenwald.2600/core.json` is `X.Y.Z-dev`.
-To release: change it to `X.Y.Z` in its own commit, tag that commit
-`vX.Y.Z`, and run `make bitstream package release` there. `make release`
+`main` takes changes only through pull requests, squash-merged. Between
+releases `version` in `core/Wenwald.2600/core.json` is `X.Y.Z-dev`. Work
+on branches named like `dev-X.Y.Z` (not `vX.Y.Z`, which is the tag's name).
+
+To release:
+
+1. Open a PR whose last change sets `version` to `X.Y.Z`, and squash-merge
+   it ("Release vX.Y.Z"). That squash commit on `main` is the release
+   commit.
+2. On `main` at that commit: `git tag vX.Y.Z`, then
+   `make bitstream package release`, then `git push origin refs/tags/vX.Y.Z`
+   and publish the two files in `build/release/` as GitHub release
+   `vX.Y.Z`.
+3. Start the next cycle: a new branch whose first commit sets the next
+   `X.Y.Z-dev`.
+
+Tag and build only after the merge: squashing makes a new commit, so a
+tag or bitstream from the branch would not match `main`. `make release`
 refuses anything else (a `-dev` version, uncommitted changes, a missing
 tag, or a bitstream built from another commit). It zips the package with
 a player README (cut from this repo's README: install, controls,
 compatibility, credits, licence), the licence files and `SOURCE.txt` into
 `build/release/`, next to a
 framework source archive (`make source`; the AMD-generated
-`clk_wiz_hdmi.v` is left out, see NOTICE). Publish both, then start the
-next `X.Y.Z-dev`.
-
-Install as described in the [README](../README.md): copy the
-`Wenwald.2600` folder to `/cores/` on the SD card.
+`clk_wiz_hdmi.v` is left out, see NOTICE).
 
 ## Tests (optional)
 
