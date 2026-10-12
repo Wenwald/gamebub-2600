@@ -2,49 +2,27 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Mark Schlosser
 #
-# Source documents for a release (run by make source / make release):
+# Release helpers (run by make release):
 #
-#   release_source.py framework OUT.tar.gz
-#       The framework submodule at its pinned commit (git archive, so local
-#       changes never leak in), minus AMD's generated clk_wiz_hdmi.v, plus
-#       NOT-INCLUDED.txt saying where to get it. The AMD EULA permits that
-#       file only in bitstream form or to Vivado licensees. Fails if any
-#       AMD-copyrighted file would be included.
-#   release_source.py source-txt OUT VERSION FRAMEWORK_ARCHIVE_NAME
-#       SOURCE.txt for the zip: which commits the release is built from.
+#   release_source.py source-txt OUT VERSION
+#       SOURCE.txt for the zip: which commits the release is built from
+#       (this repository and the framework's own repository, which is the
+#       framework's source location under CERN-OHL-W, see NOTICE).
 #   release_source.py check-release VERSION BITSTREAM [REPO]
 #       Refuse unless this is a real release: VERSION is X.Y.Z (no -dev),
 #       the tree is clean, HEAD is tagged vVERSION, and the bitstream's
 #       GitRev stamp is HEAD (built from that commit).
 
-import io
 import os
 import re
 import subprocess
 import sys
-import tarfile
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 FRAMEWORK = os.path.join(ROOT, 'framework')
 FRAMEWORK_URL = 'https://github.com/gamebub/framework'
 REPO_URL = 'https://github.com/Wenwald/gamebub-2600'
-AMD_FILE = 'verilog/handheld/clk_wiz_hdmi.v'
-AMD_MARK = b'Advanced Micro Devices'
 PROVENANCE = os.path.join(ROOT, 'third_party', 'atari7800_mister', 'PROVENANCE')
-
-NOT_INCLUDED = '''\
-Game Bub framework %(commit)s, as used (unmodified) by gamebub-2600.
-
-Not included: %(amd)s, AMD Clocking Wizard output
-("(c) Copyright 2017-2018, 2023 Advanced Micro Devices, Inc."). The AMD
-Vivado EULA permits distributing it only in bitstream form or to Vivado
-licensees. Get it from %(url)s
-at commit %(commit)s,
-or regenerate it with Vivado's Clocking Wizard (module clk_wiz_hdmi_clk_wiz; 50 MHz in;
-27.03125 MHz and 135.15625 MHz out; see the instance in
-verilog/handheld/top.sv).
-'''
-
 
 def git(*args, cwd=ROOT):
     r = subprocess.run(['git'] + list(args), cwd=cwd, capture_output=True)
@@ -62,36 +40,7 @@ def pinned_framework():
     return pinned
 
 
-def framework_archive(out):
-    commit = pinned_framework()
-    src = tarfile.open(fileobj=io.BytesIO(git('archive', '--format=tar', commit, cwd=FRAMEWORK)))
-    prefix = 'framework-%s/' % commit[:12]
-    included, errors = 0, []
-    os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
-    with tarfile.open(out, 'w:gz') as dst:
-        for m in src.getmembers():
-            if m.name == AMD_FILE:
-                continue
-            data = src.extractfile(m).read() if m.isfile() else None
-            if data is not None and AMD_MARK in data:
-                errors.append(m.name)
-            m.name = prefix + m.name
-            m.uname = m.gname = ''
-            m.uid = m.gid = 0
-            dst.addfile(m, io.BytesIO(data) if data is not None else None)
-            included += m.isfile()
-        note = (NOT_INCLUDED % {'commit': commit, 'amd': AMD_FILE, 'url': FRAMEWORK_URL}).encode()
-        info = tarfile.TarInfo(prefix + 'NOT-INCLUDED.txt')
-        info.size, info.mode, info.mtime = len(note), 0o644, src.getmembers()[0].mtime
-        dst.addfile(info, io.BytesIO(note))
-    if errors:
-        os.remove(out)
-        raise SystemExit('AMD-copyrighted file(s) would be included: %s' % ', '.join(errors))
-    print('wrote %s: framework %s, %d files, without %s'
-          % (os.path.relpath(out, ROOT), commit[:12], included, AMD_FILE))
-
-
-def source_txt(out, version, archive_name):
+def source_txt(out, version):
     commit = git('rev-parse', 'HEAD').decode().strip()
     dirty = git('status', '--porcelain', '--untracked-files=no').decode().strip()
     upstream = [l.split()[1] for l in open(PROVENANCE) if l.startswith('commit ')][0]
@@ -103,8 +52,7 @@ def source_txt(out, version, archive_name):
         f.write('  (includes the Atari7800_MiSTer files used, in\n'
                 '  third_party/atari7800_mister/, from upstream commit %s;\n'
                 '  see its PROVENANCE)\n' % upstream)
-        f.write('- %s commit %s,\n  copy published with the release as %s\n'
-                % (FRAMEWORK_URL, pinned_framework(), archive_name))
+        f.write('- %s commit %s\n' % (FRAMEWORK_URL, pinned_framework()))
         f.write('\nLicences: see NOTICE.\n')
     print('wrote %s for commit %s%s' % (os.path.relpath(out, ROOT), commit[:12],
                                         ' (DIRTY)' if dirty else ''))
@@ -135,15 +83,12 @@ def check_release(version, bitstream, repo=ROOT):
 
 
 def main(argv):
-    if len(argv) == 2 and argv[0] == 'framework':
-        framework_archive(argv[1])
-    elif len(argv) == 4 and argv[0] == 'source-txt':
+    if len(argv) == 3 and argv[0] == 'source-txt':
         source_txt(*argv[1:])
     elif len(argv) in (3, 4) and argv[0] == 'check-release':
         return check_release(*argv[1:])
     else:
-        print('usage: release_source.py framework OUT.tar.gz | '
-              'source-txt OUT VERSION FRAMEWORK_ARCHIVE_NAME | '
+        print('usage: release_source.py source-txt OUT VERSION | '
               'check-release VERSION BITSTREAM [REPO]')
         return 2
     return 0

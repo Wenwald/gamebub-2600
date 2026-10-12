@@ -126,8 +126,7 @@ def update(checkout):
         with open(dst, 'wb') as f:
             f.write(vendored_content(os.path.join(checkout, rel), rel))
     with open(PROVENANCE, 'w') as f:
-        f.write('# Files from Atari7800_MiSTer (MIT, see LICENSE; detect2600.sv also\n'
-                '# contains Stella-derived GPL-2.0 code, see NOTICE), unmodified except\n'
+        f.write('# Files from Atari7800_MiSTer (MIT, see LICENSE), unmodified except\n'
                 '# the "redacted" ones (data unused by this core, zeroed by\n'
                 '# scripts/vendor_upstream.py; the line gives the upstream SHA-256).\n'
                 '# Our changes are in patches/, applied by scripts/prepare_rtl.py to a\n'

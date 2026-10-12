@@ -41,7 +41,7 @@ To release:
    commit.
 2. On `main` at that commit: `git tag vX.Y.Z`, then
    `make bitstream package release`, then `git push origin refs/tags/vX.Y.Z`
-   and publish the two files in `build/release/` as GitHub release
+   and publish the zip in `build/release/` as GitHub release
    `vX.Y.Z`.
 3. Start the next cycle: a new branch whose first commit sets the next
    `X.Y.Z-dev`.
@@ -51,10 +51,8 @@ tag or bitstream from the branch would not match `main`. `make release`
 refuses anything else (a `-dev` version, uncommitted changes, a missing
 tag, or a bitstream built from another commit). It zips the package with
 a player README (cut from this repo's README: install, controls,
-compatibility, credits, licence), the licence files and `SOURCE.txt` into
-`build/release/`, next to a
-framework source archive (`make source`; the AMD-generated
-`clk_wiz_hdmi.v` is left out, see NOTICE).
+compatibility, credits, licence), `LICENSE`, `NOTICE` and `SOURCE.txt`
+into `build/release/`.
 
 ## Tests (optional)
 

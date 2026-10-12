@@ -2,10 +2,10 @@
   "metadata": {
     "id": "Wenwald.2600",
     "name": "Atari 2600",
-    "author": "Kitrinx; port by Wenwald",
-    "version": "1.0.1",
+    "author": "Wenwald (emulation: Kitrinx)",
+    "version": "1.1.0-dev",
     "url": "https://github.com/Wenwald/gamebub-2600",
-    "license": "GPL-2.0-only"
+    "license": "MIT"
   },
   "bitstreams": [
     { "target": "gamebub_rev4", "filename": "2600_rev4.bit" }

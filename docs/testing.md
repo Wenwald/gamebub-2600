@@ -15,6 +15,7 @@ each frame as a PNG plus the audio as a WAV.
 | `core/` | Our 2600 core (`hdl/atari2600_core.sv`) | Must match the reference |
 | `gamebub/` | The Game Bub wrapper around the core, plus a model of the firmware (load commands, host handshake) and the framework (framebuffer write rules, video filter) | Must show the core's picture |
 | `cpu/` | The 6502 alone, on Klaus Dormann's functional test | CPU correctness |
+| `detect/` | Our cartridge detector and upstream's, side by side, on the same images | Lists every image where they pick a different scheme |
 
 ## Test ROMs that check themselves
 
@@ -64,6 +65,8 @@ make -C sim test          # core suite
 make -C sim test-gamebub  # same checks on the Game Bub wrapper, plus 3-5
 make -C sim test-cpu      # 6502 functional test
 python3 sim/suite.py --gamebub paddle   # one group only
+make -C sim/detect run    # our detector vs. upstream's
+python3 sim/detect/diff.py --dir DIR    # ... also over your own dumps in DIR
 ```
 
 Needs Verilator 5.052+, DASM, the fetched test ROMs
