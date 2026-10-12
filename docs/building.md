@@ -40,10 +40,19 @@ To release:
    it ("Release vX.Y.Z"). That squash commit on `main` is the release
    commit.
 2. On `main` at that commit: `git tag vX.Y.Z`, then
-   `make bitstream package release`, then `git push origin refs/tags/vX.Y.Z`
-   and publish the zip in `build/release/` as GitHub release
-   `vX.Y.Z`.
-3. Start the next cycle: a new branch whose first commit sets the next
+   `make bitstream package release`, then `git push origin refs/tags/vX.Y.Z`.
+3. Publish the zip as GitHub release `vX.Y.Z` with the
+   [GitHub CLI](https://cli.github.com/) (`gh auth login` once):
+
+   ```sh
+   gh release create vX.Y.Z build/release/Wenwald.2600-vX.Y.Z.zip \
+     --verify-tag --title "vX.Y.Z"
+   ```
+
+   `--verify-tag` stops if the tag is not on GitHub yet, instead of
+   creating it from the tip of `main`. The newest release is marked
+   Latest. Check it with `gh release view vX.Y.Z`.
+4. Start the next cycle: a new branch whose first commit sets the next
    `X.Y.Z-dev`.
 
 Tag and build only after the merge: squashing makes a new commit, so a
