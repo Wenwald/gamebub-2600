@@ -14,7 +14,7 @@ import re
 import sys
 
 KEEP = ['Install', 'Controls', 'Compatibility', 'Credits', 'Licence']
-IN_ZIP = {'LICENSE', 'COPYING.GPL-2.0', 'NOTICE'}
+IN_ZIP = {'LICENSE', 'NOTICE'}
 FOOTER = ('Full documentation, source and issue tracker:\n'
           'https://github.com/Wenwald/gamebub-2600\n')
 

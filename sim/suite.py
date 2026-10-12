@@ -40,7 +40,7 @@ OUT = os.path.join(ROOT, 'sim', 'out', 'suite')
 GAMEBUB = False
 GAMEBUB_ROM_MAX = 65536  # hdl/gamebub/atari2600_gamebub.sv ROM_ADDR_WIDTH = 16
 
-# Mapper numbers: the bss_type enum in detect2600.sv.
+# Mapper numbers: the bss_type enum in hdl/detect2600.sv.
 M = dict(F8=1, F6=2, FE=3, E0=4, F3F=5, F4=6, P2=7, FA=8, CV=9, K2=10, UA=11,
          E7=12, F0=13, M32=14, F3E=16, SB=17, WD=18, EF=19, JANE=20, CTY=22,
          FA2=25, X0840=26, FC=27, DF=28, MC2K=29, MC4K=30, MC8K=31)
@@ -73,16 +73,15 @@ MULTICART = {
 }
 # The stripe colours for hues 0-7 at luminance $A in the core's palette.
 HUES = [0xb7b7b7, 0xcdbe22, 0xe8b247, 0xf8a77f, 0xfb9fbb, 0xf09cf2, 0xd99fff, 0xbaa7ff]
-# Schemes whose detection keys on something a synthetic ROM cannot honestly
-# contain. Their mapping is still tested (forced).
+# Schemes that are not auto-detected (docs/detection-spec.md 3.22). Their
+# mapping is still tested (forced).
 NO_DETECTION = {
-    'bs_cty': 'keys on a text string inside the only CTY game',
-    'bs_fe': 'keys on code fragments from specific Activision games',
-    'bs_mc2k': 'upstream never auto-detects MC multicarts (manual only)',
-    'bs_mc4k': 'upstream never auto-detects MC multicarts (manual only)',
-    'bs_mc8k': 'upstream never auto-detects MC multicarts (manual only)',
+    'bs_cty': 'CTY is selected from the menu only',
+    'bs_mc2k': 'MC multicarts are selected from the menu only',
+    'bs_mc4k': 'MC multicarts are selected from the menu only',
+    'bs_mc8k': 'MC multicarts are selected from the menu only',
 }
-# Known gaps in upstream detection, reported but not counted as failures.
+# Known gaps in detection, reported but not counted as failures.
 # Each one is a real limitation of auto-detection: the settings menu needs
 # a manual override for these.
 # Known mapping issues, reported but not counted as failures until fixed.

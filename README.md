@@ -67,7 +67,7 @@ Works:
   P2, EF, WD, FC, 0840, JANE, CTY, FA2 without saves, 32-in-1, MC
   multicarts),
   with or without Superchip RAM.
-- Scheme auto-detection as in upstream. Schemes it cannot detect (32-in-1,
+- Scheme auto-detection. Schemes it cannot detect (32-in-1,
   MC 2K/4K/8K, CTY, some FE and 3F images) can be forced in the menu.
 
 Not supported in this version:
@@ -103,8 +103,10 @@ the steps in its "Releasing" section.
 
 How it fits together:
 - `hdl/atari2600_core.sv`: the upstream 2600 path (CPU, TIA, RIOT,
-  cartridge mapping and detection) with a small replacement for the 7800's
-  MARIA chip, which in 2600 mode only supplies clocks.
+  cartridge mapping) with a small replacement for the 7800's MARIA chip,
+  which in 2600 mode only supplies clocks.
+- `hdl/detect2600.sv`: our cartridge detector, written from
+  [docs/detection-spec.md](docs/detection-spec.md).
 - `hdl/gamebub/`: the Game Bub wrapper (ROM loading, video, audio, inputs,
   menu settings) and the clock generator.
 - `third_party/atari7800_mister/`: the upstream files the core is built
@@ -121,18 +123,23 @@ their licences: [docs/test-roms.md](docs/test-roms.md).
 
 ## Credits
 
-Game Bub port by Wenwald (Mark Schlosser). Emulation by Kitrinx (Jamie
-Blanks), from Atari7800_MiSTer. Game Bub and its framework by Eli Lipsitz.
+By Wenwald (Mark Schlosser): the 2600-only core, cartridge detection, the
+Game Bub wrapper and the test suite. Built on the emulation (CPU, TIA, RIOT,
+cartridge mappers) by Kitrinx (Jamie Blanks), from Atari7800_MiSTer. Game
+Bub and its framework by Eli Lipsitz.
 
 Developed with the help of Claude (Anthropic).
 
+Atari and Atari 2600 are trademarks of Atari Interactive, Inc. Game Bub and
+other names are trademarks of their owners. They are used here only to say
+what this core is compatible with; this project is not affiliated with or
+endorsed by any of them.
+
 ## Licence
 
-This project's source files are MIT-licensed (see [LICENSE](LICENSE)).
-The released bitstream as a whole is distributed under the GPL-2.0 (see
-[COPYING.GPL-2.0](COPYING.GPL-2.0)), because it includes upstream's
-bank-switching detection, which is derived from Stella (GPL-2.0). It also
-contains MIT, CERN-OHL-W-2.0, ISC and other third-party components; see
-[NOTICE](NOTICE) for all of them. Each release carries the source: this
-repository at the commit named in the zip's `SOURCE.txt`, plus a framework
-source archive.
+MIT (see [LICENSE](LICENSE)), for this project's source files and the
+released bitstream. The bitstream also contains third-party components
+under their own licences (MIT, CERN-OHL-W-2.0, ISC and others); see
+[NOTICE](NOTICE) for all of them, including where to get the Game Bub
+framework's source. Releases name the exact commits they are built from in
+the zip's `SOURCE.txt`. Releases up to v1.0.1 are GPL-2.0.

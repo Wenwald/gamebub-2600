@@ -1,5 +1,4 @@
-# Files from Atari7800_MiSTer (MIT, see LICENSE; detect2600.sv also
-# contains Stella-derived GPL-2.0 code, see NOTICE), unmodified except
+# Files from Atari7800_MiSTer (MIT, see LICENSE), unmodified except
 # the "redacted" ones (data unused by this core, zeroed by
 # scripts/vendor_upstream.py; the line gives the upstream SHA-256).
 # Our changes are in patches/, applied by scripts/prepare_rtl.py to a
@@ -20,7 +19,6 @@ d0a8355ecf88c8f7b4473ef063ab97c774a59537360663cc37f9b73ae35a502e  rtl/RIOT/M6532
 c29d73ea0c74e55fdbc5a31beb37f6824d475943d68ae360d6cf55083b914406  rtl/bram.v
 5d4d6a06c16034fca512f53219be8881f3cd729bc20980b38b4b775d3a8ed44a  rtl/cache_ram.v
 ed8ca7013ddbd6f7b0abe9d6fa2b70c3c42d411aff206fe443726c1fa4a446f7  rtl/cart2600.sv
-1584bbce4beebb497ec33155682eafa4868928853b46e4e777eacf4fd340824b  rtl/detect2600.sv
 e8325049b158040322a931e522333c8116323e5b6bf54828170a743e35c25277  rtl/mapper_fa2.sv
 77f601e03864a372c5e10318923580e685c7d41c18502e09623c5c721eb38f29  rtl/paddles.sv
 8a977c0bcd1d325347d3f54cd4cdb41d230f0d360036013521b21b9c60103055  rtl/palettes/NWARM.hex

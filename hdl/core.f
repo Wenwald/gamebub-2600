@@ -6,14 +6,16 @@
 // patched copy made by scripts/prepare_rtl.py). top.sv supplies M6502C,
 // ctrl_reg and cpu_phase_controller (its Atari7800 module is never
 // elaborated). mapper_fa2.sv is the non-ARM FA2 scheme. paddles.sv supplies
-// paddle_timer (its other modules are never elaborated).
+// paddle_timer (its other modules are never elaborated). hdl/detect2600.sv
+// is our cartridge detector (clean-room, docs/detection-spec.md); it also
+// declares the bss_type enum the cartridge files use, so it comes early.
 //
 // This list is the single source of truth: sim/core compiles it, and
 // prepare_rtl.py concatenates these files, in this order and followed by
 // hdl/gamebub.f, into rtl/atari2600_all.sv for the Game Bub (Vivado) build
 // and sim/gamebub. Sim-only sources live in sim/core/maria_full.f.
 build/upstream/rtl/6502/mos6502_pkg.sv
-build/upstream/rtl/detect2600.sv
+hdl/detect2600.sv
 build/upstream/rtl/6502/mos6502_alu.sv
 build/upstream/rtl/6502/mos6502_decode.sv
 build/upstream/rtl/6502/mos6502_dp.sv
