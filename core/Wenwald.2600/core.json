@@ -3,7 +3,7 @@
     "id": "Wenwald.2600",
     "name": "Atari 2600",
     "author": "Wenwald (emulation: Kitrinx)",
-    "version": "1.1.0-dev",
+    "version": "1.1.0",
     "url": "https://github.com/Wenwald/gamebub-2600",
     "license": "MIT"
   },
