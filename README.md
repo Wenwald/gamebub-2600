@@ -38,7 +38,9 @@ For the Game Bub rev 4. Current version: see
 3. Put your own ROMs (`.a26` or `.bin`) anywhere on the card, then choose
    **Atari 2600** and a ROM.
 
-No ROMs are included or provided.
+No ROMs or BIOS files are included or provided.
+
+> **Notice.** Only use your own homebrew ROMs or ROMs you have rights to use.
 
 ## Controls
 
@@ -58,6 +60,10 @@ centered for each ROM.
 and Right Difficulty (A/B), TV Type (Colour/B&W), Bankswitch override,
 Superchip (with a forced scheme), and Controller (Joystick/Paddle).
 Overrides apply after a Reset.
+
+The game pauses while the menu is open. After you change a setting or use
+Reset, it runs for a few frames (about 1/20 s) so the change shows behind
+the menu, then pauses again.
 
 ## Compatibility
 
@@ -81,13 +87,11 @@ Not supported in this version:
 - ARM-based cartridges (DPC+, CDF, BUS: many modern homebrews). They show
   a blank screen instead of upstream's "Out of Order" message.
 - Supercharger (AR) games.
-- Pause: the game keeps running behind the menu.
 - 7800 games: this port contains only the 2600 side of Atari7800_MiSTer.
 
 ## What's next
 
 Ideas, roughly in order; no promises or dates:
-- Pause the game while the menu is open.
 - ROMs larger than 64 KB, loaded into the Game Bub's external memory.
 - PAL and SECAM ROMs, with a choice of palette.
 - Saves for the cartridge types that have them (FA2, CTY).

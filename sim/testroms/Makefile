@@ -8,7 +8,7 @@ ROOT := $(abspath ../..)
 OUT  := $(ROOT)/sim/roms/synthetic
 
 # Single-build sources: name.asm -> name.a26
-PLAIN := tone bs_e0 bs_3f bs_f0 bs_2k bs_cv bs_e7 bs_3e bs_fe bs_wd bs_fc bs_p2
+PLAIN := tone switches bs_e0 bs_3f bs_f0 bs_2k bs_cv bs_e7 bs_3e bs_fe bs_wd bs_fc bs_p2
 
 # bs_fx.asm variants: bs_<name>.a26 built with these symbols (see bs_fx.asm).
 FX_4ksc  := BANKS=1  HOT=0xFFF8 RAM=128 SC4K=1

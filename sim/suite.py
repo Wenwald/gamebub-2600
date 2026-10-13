@@ -21,9 +21,22 @@
 # positions, buttons or the Paddle setting and held d-pad buttons; `paddle`
 # as a name selects them all.
 #
+# Pause checks (core only, `pause` selects them): each ROM in PAUSE runs once
+# plainly and once with the core's pause input raised for PAUSE_EVERY[1] of
+# every PAUSE_EVERY[0] clocks (about 150 pauses, landing on every clock
+# phase). Frame lines and audio must be identical, and no pixel may come out
+# after the first few clocks of a pause (so a pause that does nothing fails).
+#
+# Menu check (Game Bub only, `menu`): switches.asm shows the console switches
+# and a frame counter; the harness opens the menu (--menu), changes Left
+# Difficulty and TV Type, uses Reset, then closes it. Frozen while the menu
+# is idle, exactly MENU_RUN frames after each change, the last of them
+# showing it, and not one frame run unseen (the counter never skips).
+#
 # Usage: python3 sim/suite.py [--gamebub] [name ...]
 #        (or make -C sim test / make -C sim test-gamebub)
 
+import concurrent.futures
 import os
 import struct
 import subprocess
@@ -120,6 +133,25 @@ PADDLE_GAMEBUB = {
     'pdl_gbright-': ('pdl_gbright', ('--paddle', '--hold', 'right,a'), 45, False),
     'pdl_gbspeed-': ('pdl_gbspeed', ('--paddle', '--hold', 'left'), 20, False),
 }
+
+# rom, extra args: CPU/TIA/RIOT, audio, cartridge RAM schemes, a multicart
+# with console resets, paddle timers, third-party ROMs.
+PAUSE = [
+    ('tone', ()),
+    ('bs_f8sc', ('--mapper', '1', '--sc')),
+    ('bs_e7', ('--mapper', '12')),
+    ('bs_fa', ('--mapper', '8')),
+    ('bs_cv', ('--mapper', '9')),
+    ('bs_3e', ('--mapper', '16')),
+    ('bs_mc4k', ('--mapper', '30', '--reset-every', '3')),
+    ('pdl_mid', ('--paddle', '128,64')),
+    ('pdl_btna', ('--paddle', '128,64', '--paddle-btn', 'a')),
+    ('../jamesor/test-01', ()),
+    ('../testbr/testbr', ()),
+    ('../videotest/videotest', ()),
+]
+PAUSE_EVERY = '100003,40001'
+PAUSE_FRAMES = 40
 
 GREEN = 0x329411
 OUT_OF_ORDER = 0xd5d5d5  # the unsupported-cartridge screen's background    # NTSC $C6 in the core's palette
@@ -247,6 +279,79 @@ def check_paddle(rom, args, meas, want_green):
     return True, '%s: %s' % (shown, 'green' if green else 'not green, as it must')
 
 
+def check_pause(rom, extra):
+    def go(tag, more=()):
+        out = os.path.join(OUT, 'pause', os.path.basename(rom) + tag)
+        r = subprocess.run([BIN, os.path.join(ROMS, rom + '.a26'), '--frames', str(PAUSE_FRAMES),
+                            '--out', out, *extra, *more],
+                           cwd=UPSTREAM, capture_output=True, text=True)
+        lines = r.stdout.splitlines()
+        frames = [l for l in lines if l.startswith('frame ')]
+        info = next((l for l in lines if l.startswith('paused ')), '')
+        wav = open(os.path.join(out, 'audio.wav'), 'rb').read() if not r.returncode else b''
+        return r.returncode, frames, info, wav
+    rc1, f1, _, w1 = go('')
+    rc2, f2, info, w2 = go('_paused', ('--pause-every', PAUSE_EVERY))
+    if rc1 or rc2 or len(f1) != PAUSE_FRAMES:
+        return False, 'simulation failed'
+    late = int(info.split(', ')[-1].split()[0]) if info else -1
+    if late != 0:
+        return False, 'core kept running while paused (%s)' % info
+    if f1 != f2:
+        n = next(i for i, (a, b) in enumerate(zip(f1 + [''], f2 + [''])) if a != b)
+        return False, 'frame %d differs after pauses' % n
+    if w1 != w2:
+        return False, 'audio differs after pauses'
+    return True, '%d frames and audio identical; %s' % (PAUSE_FRAMES, info)
+
+
+MENU_RUN = 3     # hdl/gamebub/atari2600_gamebub.sv MENU_RUN_FRAMES
+
+
+def check_menu():
+    pal = [int(x, 16) for x in open(os.path.join(UPSTREAM, 'rtl', 'palettes', 'NWARM.hex')).read().split()]
+    colour = {pal[b]: b for b in range(0, 256, 2)}   # RGB -> TIA colour byte
+    out = os.path.join(OUT, 'menu')
+    r = subprocess.run([BIN, os.path.join(ROMS, 'switches.a26'), '--frames', '26', '--out', out,
+                        '--menu', '6'], cwd=UPSTREAM, capture_output=True, text=True)
+    if r.returncode:
+        return False, 'simulation failed'
+    frames, steps = [], {}
+    for l in r.stdout.splitlines():
+        if l.startswith('frame '):
+            b = colour.get(int(l.rsplit('px ', 1)[1], 16), 0)
+            frames.append((b >> 4, (b >> 1) & 7))   # (switches hue, counter)
+        elif l.startswith('menu ') and ' swaps ' in l:
+            a, z = l.split(' swaps ')[1].split()
+            steps[l.split()[1].rstrip(':')] = (int(a), int(z))
+    if sorted(steps) != ['difficulty', 'open', 'reset', 'tv']:
+        return False, 'menu steps missing: %s' % steps
+    if steps['open'][1] != steps['open'][0]:
+        return False, 'ran %d frames with the menu open' % (steps['open'][1] - steps['open'][0])
+    for step in ('difficulty', 'tv', 'reset'):
+        a, z = steps[step]
+        if z - a != MENU_RUN:
+            return False, '%s: ran %d frames, expected %d' % (step, z - a, MENU_RUN)
+    hue_ok = {'difficulty': 0xB, 'tv': 0x9}      # Left Difficulty B, then B&W
+    for step, hue in hue_ok.items():
+        got = frames[steps[step][1] - 1][0]
+        if got != hue:
+            return False, '%s: last frame shows switches %X, expected %X' % (step, got, hue)
+    if any(h != 0xF for h, _ in frames[1:steps['open'][0]]):
+        return False, 'switches wrong before the menu'
+    if any(h != 0x9 for h, _ in frames[steps['tv'][1] - 1:]):
+        return False, 'settings lost after Reset or closing the menu'
+    restart = steps['reset'][0]
+    if frames[restart][1] != 1:
+        return False, 'no restart after Reset (counter %d)' % frames[restart][1]
+    for k in range(2, len(frames)):
+        if k != restart and frames[k][1] != (frames[k - 1][1] + 1) % 8:
+            return False, 'frame %d: counter %d after %d (frames run unseen or lost)' % (
+                k, frames[k][1], frames[k - 1][1])
+    return True, 'frozen in the menu; %d frames per change, each shown; %d frames, none skipped' % (
+        MENU_RUN, len(frames))
+
+
 def frame_sums(binary, rom_path, frames, out, extra=()):
     r = subprocess.run([binary, rom_path, '--frames', str(frames), '--out', out, *extra],
                        cwd=UPSTREAM, capture_output=True, text=True)
@@ -369,6 +474,13 @@ def main(argv):
         print('%-10s %s' % (name, ('PASS ' if ok else 'FAIL ') + info))
         total += 1
         failed += not ok
+    if not GAMEBUB and (not only or 'pause' in only):
+        with concurrent.futures.ThreadPoolExecutor(os.cpu_count() or 4) as pool:
+            results = list(pool.map(lambda p: check_pause(*p), PAUSE))
+        for (rom, _), (ok, info) in zip(PAUSE, results):
+            print('%-10s %s' % ('pause', ('PASS ' if ok else 'FAIL ') + os.path.basename(rom) + ': ' + info))
+            total += 1
+            failed += not ok
     if not only or 'tone' in only:
         ok, info = check_tone()
         print('%-10s %s' % ('tone', ('PASS ' if ok else 'FAIL ') + info))
@@ -380,6 +492,11 @@ def main(argv):
                 continue
             ok, info = check_equivalence(rom)
             print('%-10s %s' % ('eq', ('PASS ' if ok else 'FAIL ') + rom + ': ' + info))
+            total += 1
+            failed += not ok
+        if not only or 'menu' in only:
+            ok, info = check_menu()
+            print('%-10s %s' % ('menu', ('PASS ' if ok else 'FAIL ') + info))
             total += 1
             failed += not ok
         if not only or 'gap' in only:

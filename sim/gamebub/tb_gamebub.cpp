@@ -25,7 +25,7 @@
 //
 //   tb_gamebub rom.a26 [--frames N] [--out DIR] [--dump-every K] [--mapper M]
 //                      [--sc] [--reset-every R] [--word-gap G] [--px-y Y]
-//                      [--paddle] [--hold BUTTONS]
+//                      [--paddle] [--hold BUTTONS] [--menu F]
 //
 // --mapper/--sc set the bankswitch settings; --reset-every R uses the Reset
 // setting at the start of every R-th frame. --word-gap G idles G cycles
@@ -34,6 +34,14 @@
 // test ROMs' status band. --paddle sets the Controller setting to Paddle.
 // --hold holds Game Bub buttons (comma-separated: up, down, left, right, a,
 // b, x, y, l, r, start, select) from CoreRun to the end of the run.
+//
+// --menu F opens the menu once frame F has been shown, as the firmware does
+// (NotifyFocus(0)), then: waits; writes Left Difficulty = B, waits; writes
+// TV Type = B&W, waits; uses Reset, waits; closes the menu (NotifyFocus(1))
+// and runs on. Each wait is kMenuWait clocks (several frames) and prints
+// "menu <step>: swaps A B": the frames completed in it are frames A..B-1
+// (frame k is the buffer finished at the k-th swap, counting from 0); they
+// are printed as usual, as they are shown.
 
 #include <cstdint>
 #include <cstdio>
@@ -50,6 +58,8 @@ namespace {
 
 constexpr int kWidth = 320, kHeight = 240;
 constexpr int kFilterLatency = 2;
+constexpr uint64_t kTicksPerFrame = 228ULL * 262 * 4;
+constexpr uint64_t kMenuWait = kTicksPerFrame * 8;
 
 constexpr uint16_t kCmdGetStatus = 0x0000, kCmdCoreRun = 0x0100, kCmdSetupComplete = 0x0102,
                    kCmdNotifyFocus = 0x0200, kCmdFileWriteStart = 0x0300,
@@ -237,6 +247,7 @@ struct Sim {
 int main(int argc, char **argv) {
 	std::string rom_path, out = "sim/out/gamebub";
 	int frames = 60, dump_every = 0, mapper = 0, reset_every = 0, word_gap = 0, px_y = 56;
+	int menu_at = -1;
 	bool sc = false, paddle = false;
 	std::string hold;
 	for (int i = 1; i < argc; i++) {
@@ -252,6 +263,7 @@ int main(int argc, char **argv) {
 		else if (a == "--sc") sc = true;
 		else if (a == "--paddle") paddle = true;
 		else if (a == "--hold") hold = next();
+		else if (a == "--menu") menu_at = std::atoi(next());
 		else if (a[0] != '+') rom_path = a;
 	}
 	if (rom_path.empty()) {
@@ -373,20 +385,11 @@ int main(int argc, char **argv) {
 	r = s.command(0x7777);
 	expect(r.first, "unknown command is an error");
 
-	const uint64_t ticks_per_frame = 228ULL * 262 * 4;
-	const uint64_t max_ticks = s.tick + ticks_per_frame * uint64_t(frames + 4) * 2;
+	uint64_t max_ticks = s.tick + kTicksPerFrame * uint64_t(frames + 4) * 2;
 	s.record_audio = true;
 	int frame_no = 0, reset_frame = -1;
 	size_t shown = 0;
-	while (frame_no < frames && s.tick < max_ticks) {
-		if (reset_every && frame_no > 0 && frame_no % reset_every == 0 && frame_no != reset_frame) {
-			reset_frame = frame_no;
-			s.write(0x00002000, 1);
-			s.idle();
-		} else {
-			s.idle();
-		}
-
+	auto show_frames = [&]() {
 		while (shown < s.pending.size() && frame_no < frames) {
 			const std::vector<uint8_t> &img = s.pending[shown];
 			const int rows = s.frame_rows[shown], width = s.frame_max_x[shown];
@@ -404,6 +407,44 @@ int main(int argc, char **argv) {
 			std::printf("frame %4d  %dx%d written  sum %llu  px %06x\n", frame_no, width, rows,
 			            static_cast<unsigned long long>(sum), px);
 			frame_no++;
+		}
+	};
+	// Idles kMenuWait clocks, showing frames as they come; returns the
+	// framebuffer swaps seen.
+	auto menu_wait = [&](const char *step) {
+		const size_t swaps = s.frame_rows.size();
+		for (uint64_t t = 0; t < kMenuWait; t += 1024) {
+			s.idle(1024);
+			show_frames();
+		}
+		std::printf("menu %s: swaps %zu %zu\n", step, swaps, s.frame_rows.size());
+	};
+	while (frame_no < frames && s.tick < max_ticks) {
+		if (reset_every && frame_no > 0 && frame_no % reset_every == 0 && frame_no != reset_frame) {
+			reset_frame = frame_no;
+			s.write(0x00002000, 1);
+			s.idle();
+		} else {
+			s.idle();
+		}
+
+		show_frames();
+
+		if (menu_at >= 0 && frame_no == menu_at + 1) {
+			menu_at = -1;
+			r = s.command(kCmdNotifyFocus, {0});
+			expect(!r.first, "NotifyFocus(0)");
+			menu_wait("open");
+			s.write(0x00001000, 0);
+			menu_wait("difficulty");
+			s.write(0x00001008, 0);
+			menu_wait("tv");
+			s.write(0x00002000, 1);
+			menu_wait("reset");
+			r = s.command(kCmdNotifyFocus, {1});
+			expect(!r.first, "NotifyFocus(1)");
+			std::printf("menu closed\n");
+			max_ticks += 4 * kMenuWait;
 		}
 	}
 

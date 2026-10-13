@@ -15,6 +15,11 @@
 //   - Commands: host_commandHost_request is held until done/error; opcode in
 //     the register at 0xF000_0000, argument at 0xF000_0004.
 //
+// Pause: while the menu has focus (NotifyFocus(0)) the console is frozen.
+// The switches are bits the game reads itself, so after each settings write
+// or Reset the console runs on for a few frames (see "Console") to read them
+// and redraw behind the menu, then freezes again.
+//
 // Core memory map (32-bit registers):
 //   0x0000_0000  r   status: [0] ROM loaded, [1] load error, [13:8] mapper,
 //                    [14] Superchip
@@ -312,6 +317,43 @@ module atari2600_gamebub #(
 	end
 	wire core_reset = reset || core_halt || rom_loading || reset_stretch != 8'd0;
 
+	// Pause behind the menu. Unfocused, the core runs only after a write to
+	// a setting (0x1xxx) or the Reset action (0x2000): until the framework
+	// has swapped framebuffers MENU_RUN_FRAMES times (rising edges of
+	// video_vblank; the frame drawn after the game has read the new switch
+	// is then on screen), or at most 2^MENU_RUN_BITS clocks (0.29 s) for a
+	// game that never finishes a frame. Then it freezes again, mid-frame if
+	// need be: the framework keeps showing the last whole frame.
+	localparam logic [1:0] MENU_RUN_FRAMES = 2'd3;
+	localparam int         MENU_RUN_BITS   = 22;
+
+	logic [1:0]               menu_run_frames;   // swaps still to run
+	logic [MENU_RUN_BITS-1:0] menu_run_clocks;   // clocks still allowed
+	logic                     menu_prev_vblank;
+
+	wire settings_write = mem_start && host_mem_write &&
+	                      (host_mem_address[31:12] == 20'h00001 ||
+	                       host_mem_address == 32'h0000_2000);
+
+	always_ff @(posedge clock) begin
+		menu_prev_vblank <= video_vblank;
+		if (reset || core_focus) begin
+			menu_run_frames <= 2'd0;
+			menu_run_clocks <= '0;
+		end else if (settings_write) begin
+			menu_run_frames <= MENU_RUN_FRAMES;
+			menu_run_clocks <= '1;
+		end else if (menu_run_frames != 2'd0) begin
+			if (menu_run_clocks == '0)
+				menu_run_frames <= 2'd0;
+			else if (video_vblank && !menu_prev_vblank)
+				menu_run_frames <= menu_run_frames - 2'd1;
+			menu_run_clocks <= menu_run_clocks - 1'd1;
+		end
+	end
+
+	wire core_pause = !core_focus && menu_run_frames == 2'd0;
+
 	// Paddle on the d-pad. Paddle A's position (upstream's 0..255 "kohms";
 	// the game reads roughly 3/4 of it as its line count) moves while Left
 	// or Right is held: Right lowers it, as upstream's analog stick and
@@ -370,6 +412,7 @@ module atari2600_gamebub #(
 	atari2600_core #(.ROM_ADDR_WIDTH(ROM_ADDR_WIDTH)) core (
 		.clk_sys         (clock),
 		.reset           (core_reset),
+		.pause           (core_pause),
 		.load_start      (load_start),
 		.load_valid      (core_load_valid),
 		.load_addr       (core_load_addr),
