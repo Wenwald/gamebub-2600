@@ -27,12 +27,22 @@
 // the TIA's dump control and calibrated on the game's own INPT reads. The
 // paddle buttons are the caller's: A on pa_in[7], B on pa_in[6], as on the
 // real port.
+//
+// Pause: while pause is high the console stands still. As in upstream's
+// pause, MARIA's clock divider stops, so the CPU, TIA, RIOT and cartridge
+// get no more clock enables; the paddle timers stop too. Upstream also
+// blocks cartridge RAM writes; with the bus frozen they could only repeat
+// the byte already written, so this core leaves them be. Pixels already in
+// the video pipeline still come out, then the outputs hold. Unlike upstream,
+// video_mux keeps its normal path (no pixels are made up while paused).
+// Reset overrides pause.
 
 module atari2600_core #(
 	parameter int ROM_ADDR_WIDTH = 16   // 64 KB
 ) (
 	input  logic        clk_sys,        // 14.318182 MHz (NTSC)
 	input  logic        reset,          // hold high while loading
+	input  logic        pause,          // freeze the console (see above)
 
 	// ROM load stream (one byte per load_valid).
 	input  logic        load_start,     // pulse before the first byte
@@ -84,7 +94,6 @@ module atari2600_core #(
 	localparam logic bypass_bios = 1'b1;
 	localparam logic cpu_driver  = 1'b1;
 	localparam logic PAL         = 1'b0;
-	localparam logic pause       = 1'b0;
 
 	/////////////
 	// Signals //
@@ -241,6 +250,7 @@ module atari2600_core #(
 	maria_2600 maria_inst
 	(
 		.clk_sys    (clk_sys),
+		.ce         (~pause || effective_reset),
 		.AB_in      (AB),
 		.mclk0      (mclk0),
 		.mclk1      (mclk1),
@@ -413,9 +423,9 @@ module atari2600_core #(
 	// Paddles (upstream Atari7800.sv: paddle_timer per paddle, cleared while
 	// the TIA dumps the pots, i.e. VBLANK bit 7; i_out is ~VBLANK[7]).
 	logic [33:0] paddle_diff_a, paddle_diff_b;
-	paddle_timer paddle_a (clk_sys, 1'b1, reset || ~paddle_en, {2'b00, paddle_pos_a},
+	paddle_timer paddle_a (clk_sys, ~pause, reset || ~paddle_en, {2'b00, paddle_pos_a},
 	                       ~tia_i_out[0], tia_paddle_read[0], paddle_wire[0], paddle_diff_a);
-	paddle_timer paddle_b (clk_sys, 1'b1, reset || ~paddle_en, {2'b00, paddle_pos_b},
+	paddle_timer paddle_b (clk_sys, ~pause, reset || ~paddle_en, {2'b00, paddle_pos_b},
 	                       ~tia_i_out[0], tia_paddle_read[1], paddle_wire[1], paddle_diff_b);
 	assign tia_i = {paddle[3:2], paddle_en ? paddle_wire : paddle[1:0]};
 
@@ -437,7 +447,7 @@ module atari2600_core #(
 		.tia_hsync      (tia_hsync),
 		.tia_vsync      (tia_vsync),
 		.tia_pix_ce     (tia_pix_ce),
-		.pause          (pause),
+		.pause          (1'b0),
 		.is_maria       (1'b0),
 		.pal_temp       (2'd0),
 		.pal_load       (1'b0),

@@ -46,6 +46,13 @@ carry their expected results as assembler symbols.
    same frames as one sent back to back.
 6. **Audio:** the tone ROM's frequency is measured from the WAV
    (872.2 Hz ± 1).
+7. **Pause (core):** a ROM run with the core paused for 40,001 of every
+   100,003 clocks gives the same frames and audio as a run without pauses,
+   and no pixel comes out after the first few clocks of a pause.
+8. **Menu (Game Bub):** `switches.asm` shows the console switches and a
+   frame counter. With the menu open no frame is drawn; after each setting
+   or Reset exactly three are, the last showing the change, and the counter
+   never skips a frame.
 
 A build variant (`make -C sim/core run VARIANT=lockstep ROM=...`) runs our MARIA
 replacement in lockstep with upstream's real MARIA and stops at the first
@@ -62,7 +69,7 @@ The paddle checks also include runs that must *not* turn green.
 
 ```sh
 make -C sim test          # core suite
-make -C sim test-gamebub  # same checks on the Game Bub wrapper, plus 3-5
+make -C sim test-gamebub  # same checks on the Game Bub wrapper, plus 3-5 and 8
 make -C sim test-cpu      # 6502 functional test
 python3 sim/suite.py --gamebub paddle   # one group only
 make -C sim/detect run    # our detector vs. upstream's

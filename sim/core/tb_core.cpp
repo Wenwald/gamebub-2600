@@ -8,6 +8,7 @@
 //
 //   tb_core rom.a26 [--frames N] [--out DIR] [--dump-every K] [--mapper M]
 //                   [--sc] [--reset-every R] [--paddle A[,B]] [--paddle-btn a|b|ab]
+//                   [--pause-every P,L]
 //
 // --mapper M forces bankswitch scheme M (the bss_type number); --sc adds
 // Superchip RAM to it.
@@ -20,6 +21,14 @@
 // --paddle A[,B] connects paddles to the left port (paddle_en) at positions
 // A and B (0..255, default B = 0); --paddle-btn holds paddle A's and/or B's
 // button (pa_in bit 7 / bit 6) for the whole run.
+//
+// --pause-every P,L raises the core's pause input for L clocks out of every
+// P (never during reset). Paused clocks don't count as console time: audio
+// is sampled and resets are timed on running clocks only, while pixels are
+// taken whenever ce_pix is high. A correct pause therefore gives the same
+// frame lines and audio as a run without it. To show the core really
+// stopped, it also counts pixels that come out later than PAUSE_DRAIN clocks
+// into a pause (the video pipeline's last pixels may come out before that).
 
 #include <fstream>
 #include <cstdint>
@@ -37,6 +46,7 @@ int main(int argc, char **argv) {
 	int frames = 60, dump_every = 0, mapper = 0, reset_every = 0;
 	bool sc = false, paddle_en = false;
 	int paddle_a = 0, paddle_b = 0;
+	uint64_t pause_period = 0, pause_len = 0;
 	std::string paddle_btn;
 	for (int i = 1; i < argc; i++) {
 		std::string a = argv[i];
@@ -54,6 +64,16 @@ int main(int argc, char **argv) {
 			const size_t comma = v.find(',');
 			if (comma != std::string::npos) paddle_b = std::atoi(v.c_str() + comma + 1);
 		} else if (a == "--paddle-btn") paddle_btn = next();
+		else if (a == "--pause-every") {
+			const std::string v = next();
+			pause_period = std::strtoull(v.c_str(), nullptr, 10);
+			const size_t comma = v.find(',');
+			if (comma != std::string::npos) pause_len = std::strtoull(v.c_str() + comma + 1, nullptr, 10);
+			if (pause_len >= pause_period) {
+				std::fprintf(stderr, "--pause-every P,L needs L < P\n");
+				return 2;
+			}
+		}
 		else if (a[0] != '+') rom_path = a;
 	}
 	if (rom_path.empty()) {
@@ -93,6 +113,7 @@ int main(int argc, char **argv) {
 	c->sw_diff_left = 1;
 	c->sw_diff_right = 1;
 	c->reset = 1;
+	c->pause = 0;
 
 	uint64_t tick = 0;
 	auto step = [&]() {
@@ -149,6 +170,9 @@ int main(int argc, char **argv) {
 	std::vector<int16_t> audio;
 	uint64_t run = 0, reset_until = 64;  // same initial reset as tb_console
 	int reset_frame = -1;
+	uint64_t wall = 0, paused_ticks = 0;  // all clocks / clocks with pause high
+	constexpr uint64_t PAUSE_DRAIN = 8;
+	uint64_t pause_age = 0, pause_late = 0, pause_last = 0;  // into this pause; late pixels; latest pixel
 
 	while (frame_no < frames && run < max_ticks) {
 		if (reset_every && frame_no > 0 && frame_no % reset_every == 0 &&
@@ -158,11 +182,23 @@ int main(int argc, char **argv) {
 			c->reset = 1;
 		}
 		if (run == reset_until) c->reset = 0;
+		c->pause = pause_period && !c->reset && wall % pause_period >= pause_period - pause_len;
+		const bool paused = c->pause;
 		step();
-		run++;
-
-		if (run % media::kAudioDivider == 0)
-			audio.push_back(int16_t(c->audio_l & 0x7FFF));  // TIA mix: 0 = silence, max 0x7FFF
+		wall++;
+		if (paused) {
+			paused_ticks++;
+			pause_age++;
+			if (c->ce_pix) {
+				if (pause_age > pause_last) pause_last = pause_age;
+				if (pause_age > PAUSE_DRAIN) pause_late++;
+			}
+		} else {
+			pause_age = 0;
+			run++;
+			if (run % media::kAudioDivider == 0)
+				audio.push_back(int16_t(c->audio_l & 0x7FFF));  // TIA mix: 0 = silence, max 0x7FFF
+		}
 
 		if (!c->ce_pix) continue;
 		const bool hb = c->hblank, vb = c->vblank;
@@ -211,6 +247,10 @@ int main(int argc, char **argv) {
 	std::printf("colour check: %llu pixels, %llu mismatches\n",
 	            static_cast<unsigned long long>(color_checked),
 	            static_cast<unsigned long long>(color_bad));
+	if (pause_period)
+		std::printf("paused %llu of %llu clocks, last pixel %llu clocks in, %llu late pixels\n",
+		            static_cast<unsigned long long>(paused_ticks), static_cast<unsigned long long>(wall),
+		            static_cast<unsigned long long>(pause_last), static_cast<unsigned long long>(pause_late));
 	media::write_wav(out + "/audio.wav", audio);
 	std::printf("%d frames, %llu ticks (+%llu load), %zu audio samples -> %s\n", frame_no,
 	            static_cast<unsigned long long>(run), static_cast<unsigned long long>(load_ticks),

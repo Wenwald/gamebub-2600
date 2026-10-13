@@ -13,13 +13,15 @@
 //   - decodes the 2600 memory map into the TIA and RIOT chip selects.
 // Everything else (DMA, line RAM, video timing, NMI, HALT, WSYNC/READY, the
 // register file and bus driving) is idle with MEN low and is left out. The
-// clock process below is maria.sv's, with maria_en = 0 and ce = 1 folded in.
+// clock process below is maria.sv's, with maria_en = 0 folded in. ce low
+// stops every clock, as in maria.sv (upstream's pause).
 //
 // sim/core checks this cycle by cycle against the real maria module
 // (MARIA_LOCKSTEP build).
 
 module maria_2600 (
 	input  logic        clk_sys,
+	input  logic        ce,
 	input  logic [15:0] AB_in,
 
 	output logic        mclk0,
@@ -56,24 +58,26 @@ module maria_2600 (
 		pclk0 <= 1'b0;
 		pclk1 <= 1'b0;
 
-		if (mclk1 && |tia_enable_count)
-			tia_enable_count <= tia_enable_count - 1'd1;
+		if (ce) begin
+			if (mclk1 && |tia_enable_count)
+				tia_enable_count <= tia_enable_count - 1'd1;
 
-		if (pclk0)
-			slow_clk_latch <= sel_slow_clock;
+			if (pclk0)
+				slow_clk_latch <= sel_slow_clock;
 
-		mclk0 <= clk_toggle;
-		mclk1 <= ~clk_toggle;
-		clk_toggle <= ~clk_toggle;
+			mclk0 <= clk_toggle;
+			mclk1 <= ~clk_toggle;
+			clk_toggle <= ~clk_toggle;
 
-		if (mclk1) begin
-			if (clock_div != 3'd0)
-				clock_div <= clock_div - 1'd1;
-			else begin
-				pclk_toggle <= ~pclk_toggle;
-				pclk1 <= pclk_toggle;
-				pclk0 <= ~pclk_toggle;
-				clock_div <= (~pclk_toggle ? sel_slow_clock : slow_clk_latch) ? 3'd2 : 3'd1;
+			if (mclk1) begin
+				if (clock_div != 3'd0)
+					clock_div <= clock_div - 1'd1;
+				else begin
+					pclk_toggle <= ~pclk_toggle;
+					pclk1 <= pclk_toggle;
+					pclk0 <= ~pclk_toggle;
+					clock_div <= (~pclk_toggle ? sel_slow_clock : slow_clk_latch) ? 3'd2 : 3'd1;
+				end
 			end
 		end
 	end
