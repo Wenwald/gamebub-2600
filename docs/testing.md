@@ -50,9 +50,10 @@ carry their expected results as assembler symbols.
    100,003 clocks gives the same frames and audio as a run without pauses,
    and no pixel comes out after the first few clocks of a pause.
 8. **Menu (Game Bub):** `switches.asm` shows the console switches and a
-   frame counter. With the menu open no frame is drawn; after each setting
-   or Reset exactly three are, the last showing the change, and the counter
-   never skips a frame.
+   frame counter. With the menu open no frame is drawn, not even after a
+   setting change; Reset shows a black frame; after the menu closes the
+   changes show, the game restarts after a Reset, and the counter never
+   skips a frame.
 
 A build variant (`make -C sim/core run VARIANT=lockstep ROM=...`) runs our MARIA
 replacement in lockstep with upstream's real MARIA and stops at the first

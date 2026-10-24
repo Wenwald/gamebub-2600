@@ -37,11 +37,13 @@
 //
 // --menu F opens the menu once frame F has been shown, as the firmware does
 // (NotifyFocus(0)), then: waits; writes Left Difficulty = B, waits; writes
-// TV Type = B&W, waits; uses Reset, waits; closes the menu (NotifyFocus(1))
-// and runs on. Each wait is kMenuWait clocks (several frames) and prints
-// "menu <step>: swaps A B": the frames completed in it are frames A..B-1
-// (frame k is the buffer finished at the k-th swap, counting from 0); they
-// are printed as usual, as they are shown.
+// TV Type = B&W, waits; uses Reset, waits; closes the menu (NotifyFocus(1)),
+// waits ("closed"); then, right after the next swap, opens the menu,
+// uses Reset and closes it at once, waits ("reset-close") and runs on. Each
+// wait is kMenuWait clocks (several frames) and prints "menu <step>: swaps
+// A B": the frames completed in it are frames A..B-1 (frame k is the buffer
+// finished at the k-th swap, counting from 0); they are printed as usual,
+// as they are shown.
 
 #include <cstdint>
 #include <cstdio>
@@ -443,8 +445,19 @@ int main(int argc, char **argv) {
 			menu_wait("reset");
 			r = s.command(kCmdNotifyFocus, {1});
 			expect(!r.first, "NotifyFocus(1)");
+			menu_wait("closed");
+			// Right after a swap (the game in its vertical blank): open the
+			// menu, Reset, close it at once, before the black frame is done.
+			const size_t swaps = s.frame_rows.size();
+			while (s.frame_rows.size() == swaps) s.idle();
+			r = s.command(kCmdNotifyFocus, {0});
+			expect(!r.first, "NotifyFocus(0)");
+			s.write(0x00002000, 1);
+			r = s.command(kCmdNotifyFocus, {1});
+			expect(!r.first, "NotifyFocus(1)");
+			menu_wait("reset-close");
 			std::printf("menu closed\n");
-			max_ticks += 4 * kMenuWait;
+			max_ticks += 7 * kMenuWait;
 		}
 	}
 

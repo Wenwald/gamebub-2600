@@ -16,9 +16,9 @@
 //     the register at 0xF000_0000, argument at 0xF000_0004.
 //
 // Pause: while the menu has focus (NotifyFocus(0)) the console is frozen.
-// The switches are bits the game reads itself, so after each settings write
-// or Reset the console runs on for a few frames (see "Console") to read them
-// and redraw behind the menu, then freezes again.
+// Settings take effect when the game resumes and reads its switches. Reset
+// from the menu restarts the console, still frozen, and blanks the screen
+// behind the menu (see "Console").
 //
 // Core memory map (32-bit registers):
 //   0x0000_0000  r   status: [0] ROM loaded, [1] load error, [13:8] mapper,
@@ -29,7 +29,8 @@
 //   0x0000_100C  rw  bankswitch override (bss_type; 0 = auto-detect)
 //   0x0000_1010  rw  Superchip with a forced scheme (1 = on)
 //   0x0000_1014  rw  controller (0 = joystick, 1 = paddle)
-//   0x0000_2000  w   any write: console reset (power cycle; multicarts move on)
+//   0x0000_2000  w   any write: console reset (power cycle; multicarts move on);
+//                    unfocused, also a black frame
 //   0x3000_0000  w   ROM file (file id 0), little-endian words, byte offset =
 //                    address bits [27:0]
 //   0xF000_0000  rw  host command opcode / result
@@ -317,42 +318,49 @@ module atari2600_gamebub #(
 	end
 	wire core_reset = reset || core_halt || rom_loading || reset_stretch != 8'd0;
 
-	// Pause behind the menu. Unfocused, the core runs only after a write to
-	// a setting (0x1xxx) or the Reset action (0x2000): until the framework
-	// has swapped framebuffers MENU_RUN_FRAMES times (rising edges of
-	// video_vblank; the frame drawn after the game has read the new switch
-	// is then on screen), or at most 2^MENU_RUN_BITS clocks (0.29 s) for a
-	// game that never finishes a frame. Then it freezes again, mid-frame if
-	// need be: the framework keeps showing the last whole frame.
-	localparam logic [1:0] MENU_RUN_FRAMES = 2'd3;
-	localparam int         MENU_RUN_BITS   = 22;
+	// Pause behind the menu: frozen while unfocused, mid-frame if need be
+	// (the framework keeps showing the last whole frame).
+	//
+	// Reset from the menu also sends one black 320x240 frame (colour 0) in
+	// the framework's protocol: vblank high for a cycle (this swaps in what
+	// the frozen game had drawn of its frame, for the ~5 ms until the black
+	// one is done), 240 rows of 320 writes each ended by one cycle of
+	// hblank, then vblank high again, which shows it. The core stays frozen
+	// until it is done, even if the menu closes first, and the line counter
+	// (see "Video") restarts, so the game's first frame is a whole one.
+	localparam int BLACK_W = 320, BLACK_H = 240;
 
-	logic [1:0]               menu_run_frames;   // swaps still to run
-	logic [MENU_RUN_BITS-1:0] menu_run_clocks;   // clocks still allowed
-	logic                     menu_prev_vblank;
+	logic       black_busy;
+	logic       black_first;   // the opening vblank cycle
+	logic [8:0] black_x;       // BLACK_W = the row's hblank cycle
+	logic [7:0] black_y;
 
-	wire settings_write = mem_start && host_mem_write &&
-	                      (host_mem_address[31:12] == 20'h00001 ||
-	                       host_mem_address == 32'h0000_2000);
+	wire black_begin = reset_request && !core_focus;
 
 	always_ff @(posedge clock) begin
-		menu_prev_vblank <= video_vblank;
-		if (reset || core_focus) begin
-			menu_run_frames <= 2'd0;
-			menu_run_clocks <= '0;
-		end else if (settings_write) begin
-			menu_run_frames <= MENU_RUN_FRAMES;
-			menu_run_clocks <= '1;
-		end else if (menu_run_frames != 2'd0) begin
-			if (menu_run_clocks == '0)
-				menu_run_frames <= 2'd0;
-			else if (video_vblank && !menu_prev_vblank)
-				menu_run_frames <= menu_run_frames - 2'd1;
-			menu_run_clocks <= menu_run_clocks - 1'd1;
+		if (reset) begin
+			black_busy <= 1'b0;
+		end else if (black_begin) begin
+			black_busy  <= 1'b1;
+			black_first <= 1'b1;
+			black_x     <= 9'd0;
+			black_y     <= 8'd0;
+		end else if (black_busy) begin
+			black_first <= 1'b0;
+			if (!black_first) begin
+				if (black_x != 9'(BLACK_W)) begin
+					black_x <= black_x + 9'd1;
+				end else begin
+					black_x <= 9'd0;
+					black_y <= black_y + 8'd1;
+					if (black_y == 8'(BLACK_H - 1))
+						black_busy <= 1'b0;
+				end
+			end
 		end
 	end
 
-	wire core_pause = !core_focus && menu_run_frames == 2'd0;
+	wire core_pause = !core_focus || black_busy;
 
 	// Paddle on the d-pad. Paddle A's position (upstream's 0..255 "kohms";
 	// the game reads roughly 3/4 of it as its line count) moves while Left
@@ -487,7 +495,7 @@ module atari2600_gamebub #(
 		if (de_count != 2'd0)
 			de_count <= de_count - 2'd1;
 
-		if (reset) begin
+		if (reset || black_begin) begin
 			line        <= 9'h1FF;
 			pixel       <= 8'd0;
 			prev_vsync  <= 1'b0;
@@ -523,10 +531,12 @@ module atari2600_gamebub #(
 		end
 	end
 
-	assign video_dataEnable = de_count != 2'd0;
-	assign video_vblank     = fb_vblank;
-	assign video_hblank     = fb_hblank;
-	assign {video_data_r, video_data_g, video_data_b} = de_color;
+	// The black frame (see "Console") takes over while it runs.
+	assign video_dataEnable = black_busy ? !black_first && black_x != 9'(BLACK_W)
+	                                     : de_count != 2'd0;
+	assign video_vblank     = black_busy ? black_first : fb_vblank;
+	assign video_hblank     = black_busy ? black_first || black_x == 9'(BLACK_W) : fb_hblank;
+	assign {video_data_r, video_data_g, video_data_b} = black_busy ? 7'd0 : de_color;
 
 	// =========================================================================
 	// Video filter (display clock): stored TIA colour -> NTSC RGB. Latency 2.

@@ -29,9 +29,10 @@
 #
 # Menu check (Game Bub only, `menu`): switches.asm shows the console switches
 # and a frame counter; the harness opens the menu (--menu), changes Left
-# Difficulty and TV Type, uses Reset, then closes it. Frozen while the menu
-# is idle, exactly MENU_RUN frames after each change, the last of them
-# showing it, and not one frame run unseen (the counter never skips).
+# Difficulty and TV Type, uses Reset, then closes it; later Resets with the
+# menu closed at once. Not one frame runs while the menu is open; Reset shows
+# a black frame and the game restarts from it; the changes show after the
+# menu closes, and not one frame runs unseen (the counter never skips).
 #
 # Usage: python3 sim/suite.py [--gamebub] [name ...]
 #        (or make -C sim test / make -C sim test-gamebub)
@@ -305,51 +306,62 @@ def check_pause(rom, extra):
     return True, '%d frames and audio identical; %s' % (PAUSE_FRAMES, info)
 
 
-MENU_RUN = 3     # hdl/gamebub/atari2600_gamebub.sv MENU_RUN_FRAMES
-
-
 def check_menu():
     pal = [int(x, 16) for x in open(os.path.join(UPSTREAM, 'rtl', 'palettes', 'NWARM.hex')).read().split()]
     colour = {pal[b]: b for b in range(0, 256, 2)}   # RGB -> TIA colour byte
     out = os.path.join(OUT, 'menu')
-    r = subprocess.run([BIN, os.path.join(ROMS, 'switches.a26'), '--frames', '26', '--out', out,
+    r = subprocess.run([BIN, os.path.join(ROMS, 'switches.a26'), '--frames', '30', '--out', out,
                         '--menu', '6'], cwd=UPSTREAM, capture_output=True, text=True)
     if r.returncode:
         return False, 'simulation failed'
-    frames, steps = [], {}
+    frames, steps = [], {}   # frames: (switches hue, counter, rows written, sum)
     for l in r.stdout.splitlines():
         if l.startswith('frame '):
             b = colour.get(int(l.rsplit('px ', 1)[1], 16), 0)
-            frames.append((b >> 4, (b >> 1) & 7))   # (switches hue, counter)
+            rows = int(l.split(' written')[0].rsplit('x', 1)[1])
+            frames.append((b >> 4, (b >> 1) & 7, rows, int(l.split(' sum ')[1].split()[0])))
         elif l.startswith('menu ') and ' swaps ' in l:
             a, z = l.split(' swaps ')[1].split()
             steps[l.split()[1].rstrip(':')] = (int(a), int(z))
-    if sorted(steps) != ['difficulty', 'open', 'reset', 'tv']:
+    if sorted(steps) != ['closed', 'difficulty', 'open', 'reset', 'reset-close', 'tv']:
         return False, 'menu steps missing: %s' % steps
-    if steps['open'][1] != steps['open'][0]:
-        return False, 'ran %d frames with the menu open' % (steps['open'][1] - steps['open'][0])
-    for step in ('difficulty', 'tv', 'reset'):
+    for step in ('open', 'difficulty', 'tv'):
         a, z = steps[step]
-        if z - a != MENU_RUN:
-            return False, '%s: ran %d frames, expected %d' % (step, z - a, MENU_RUN)
-    hue_ok = {'difficulty': 0xB, 'tv': 0x9}      # Left Difficulty B, then B&W
-    for step, hue in hue_ok.items():
-        got = frames[steps[step][1] - 1][0]
-        if got != hue:
-            return False, '%s: last frame shows switches %X, expected %X' % (step, got, hue)
-    if any(h != 0xF for h, _ in frames[1:steps['open'][0]]):
+        if z != a:
+            return False, '%s: ran %d frames with the menu open' % (step, z - a)
+    # Reset: black, and before it the frozen game's part-drawn frame when it
+    # stopped mid-frame (the first Reset: the harness opens the menu once a
+    # frame is shown, by then well into the next) but not when it stopped in
+    # its vertical blank (the second).
+    black = lambda f: f[2] == 240 and f[3] == 0
+    special = set()
+    for step, partial in (('reset', True), ('reset-close', False)):
+        a, z = steps[step]
+        k = a + 1 if partial else a
+        if z <= k or not black(frames[k]):
+            return False, '%s: no black frame (frames %s)' % (step, frames[a:z])
+        if partial and frames[a][2] >= 240:
+            return False, '%s: frame %d has %d rows, expected the part-drawn frame' % (
+                step, a, frames[a][2])
+        if frames[k + 1][1] != 1:
+            return False, '%s: no restart after the black frame (counter %d)' % (step, frames[k + 1][1])
+        special |= set(range(a, k + 1))
+    if steps['closed'][0] != steps['reset'][1]:
+        return False, 'frames ran before the menu closed'
+    shown = [k for k in range(1, len(frames)) if k not in special]
+    if any(frames[k][2] != 240 for k in shown):
+        return False, 'part-drawn frame outside a Reset'
+    if any(frames[k][0] != 0xF for k in shown if k < steps['open'][0]):
         return False, 'switches wrong before the menu'
-    if any(h != 0x9 for h, _ in frames[steps['tv'][1] - 1:]):
-        return False, 'settings lost after Reset or closing the menu'
-    restart = steps['reset'][0]
-    if frames[restart][1] != 1:
-        return False, 'no restart after Reset (counter %d)' % frames[restart][1]
-    for k in range(2, len(frames)):
-        if k != restart and frames[k][1] != (frames[k - 1][1] + 1) % 8:
+    if any(frames[k][0] != 0x9 for k in shown if k >= steps['closed'][0]):
+        return False, 'settings not applied after the menu (or lost after Reset)'
+    for prev, k in zip(shown, shown[1:]):
+        want = 1 if prev + 1 != k else (frames[prev][1] + 1) % 8
+        if frames[k][1] != want:
             return False, 'frame %d: counter %d after %d (frames run unseen or lost)' % (
-                k, frames[k][1], frames[k - 1][1])
-    return True, 'frozen in the menu; %d frames per change, each shown; %d frames, none skipped' % (
-        MENU_RUN, len(frames))
+                k, frames[k][1], frames[prev][1])
+    return True, 'frozen in the menu; settings applied on closing; Reset black (part-drawn ' \
+                 'frame first when mid-frame); %d frames, none skipped' % len(frames)
 
 
 def frame_sums(binary, rom_path, frames, out, extra=()):
