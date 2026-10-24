@@ -61,9 +61,9 @@ and Right Difficulty (A/B), TV Type (Colour/B&W), Bankswitch override,
 Superchip (with a forced scheme), and Controller (Joystick/Paddle).
 Overrides apply after a Reset.
 
-The game pauses while the menu is open. After you change a setting or use
-Reset, it runs for a few frames (about 1/20 s) so the change shows behind
-the menu, then pauses again.
+The game pauses while the menu is open. Setting changes take effect when
+you close the menu. Reset blanks the screen, and the game starts over when
+you close the menu.
 
 ## Compatibility
 
