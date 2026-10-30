@@ -54,6 +54,25 @@ carry their expected results as assembler symbols.
    setting change; Reset shows a black frame; after the menu closes the
    changes show, the game restarts after a Reset, and the counter never
    skips a frame.
+9. **Save states (core):** every bank-switching test ROM, the multicarts,
+   the paddle and third-party ROMs run three times: plainly, with three
+   saves along the way (which must change nothing), and with a swap: the
+   state saved in one core is loaded into a second core that has been
+   running elsewhere in the game, and the second core carries on. All three
+   give the same frames and audio. The memories, read straight from the
+   RAM arrays, must be the same as saved and as loaded. On a few ROMs a
+   traced build dumps every signal of both cores (`sim/core/ss_diff.py`):
+   any register missing from the state shows up there by name, whether or
+   not the ROM would notice it. The measured chain length must match the
+   constant in `hdl/atari2600_savestate.sv`.
+10. **Save states (Game Bub):** `savestate.asm` draws a different picture
+    every frame (its counter in RIOT RAM, or in Superchip RAM for
+    `ss_sc`). One run uses Save State and exits, saving the state file as
+    the firmware would; a second run starts with that file and uses Load
+    State: after one black frame it shows the first run's frames from the
+    one after the save on, and writes the file back unchanged. Load State
+    with no file, another ROM's state, a cut-short file or another
+    Superchip setting is refused and leaves the game running as before.
 
 A build variant (`make -C sim/core run VARIANT=lockstep ROM=...`) runs our MARIA
 replacement in lockstep with upstream's real MARIA and stops at the first
@@ -63,14 +82,16 @@ clock where any used output differs.
 
 New checks are proven by breaking what they check and watching them fail:
 for example three framebuffer writes per pixel, a handshake answered one
-cycle early, the wrong video-filter latency, a swapped paddle direction.
-The paddle checks also include runs that must *not* turn green.
+cycle early, the wrong video-filter latency, a swapped paddle direction,
+a register or a memory left out of a save state, a state file accepted
+from another ROM. The paddle checks also include runs that must *not* turn
+green.
 
 ## Commands
 
 ```sh
 make -C sim test          # core suite
-make -C sim test-gamebub  # same checks on the Game Bub wrapper, plus 3-5 and 8
+make -C sim test-gamebub  # same checks on the Game Bub wrapper, plus 3-5, 8 and 10
 make -C sim test-cpu      # 6502 functional test
 python3 sim/suite.py --gamebub paddle   # one group only
 make -C sim/detect run    # our detector vs. upstream's

@@ -8,7 +8,7 @@ ROOT := $(abspath ../..)
 OUT  := $(ROOT)/sim/roms/synthetic
 
 # Single-build sources: name.asm -> name.a26
-PLAIN := tone switches bs_e0 bs_3f bs_f0 bs_2k bs_cv bs_e7 bs_3e bs_fe bs_wd bs_fc bs_p2
+PLAIN := tone switches savestate bs_e0 bs_3f bs_f0 bs_2k bs_cv bs_e7 bs_3e bs_fe bs_wd bs_fc bs_p2
 
 # bs_fx.asm variants: bs_<name>.a26 built with these symbols (see bs_fx.asm).
 FX_4ksc  := BANKS=1  HOT=0xFFF8 RAM=128 SC4K=1
@@ -60,7 +60,7 @@ PD_gbjoy   := ALO=192 AHI=192 BLO=192 BHI=192 SW=0x70
 PD := $(patsubst PD_%,%,$(filter PD_%,$(.VARIABLES)))
 
 ROMS := $(PLAIN:%=$(OUT)/%.a26) $(FX:%=$(OUT)/bs_%.a26) $(MC:%=$(OUT)/bs_%.a26) \
-        $(PD:%=$(OUT)/pdl_%.a26)
+        $(PD:%=$(OUT)/pdl_%.a26) $(OUT)/ss_sc.a26
 
 all: $(ROMS)
 
@@ -84,8 +84,13 @@ $(PD:%=$(OUT)/pdl_%.a26): $(OUT)/pdl_%.a26: paddle.asm testlib.h Makefile
 	mkdir -p $(OUT)
 	dasm $< -f3 -v0 $(call defines,$(PD_$*)) -o$@ -l$(OUT)/pdl_$*.lst
 
+# savestate.asm with its counter in Superchip RAM.
+$(OUT)/ss_sc.a26: savestate.asm testlib.h Makefile
+	mkdir -p $(OUT)
+	dasm $< -f3 -v0 -DSC=1 -o$@ -l$(OUT)/ss_sc.lst
+
 list:
-	@echo $(sort $(PLAIN) $(FX:%=bs_%) $(MC:%=bs_%) $(PD:%=pdl_%))
+	@echo $(sort $(PLAIN) $(FX:%=bs_%) $(MC:%=bs_%) $(PD:%=pdl_%) ss_sc)
 
 clean:
 	rm -rf $(OUT)

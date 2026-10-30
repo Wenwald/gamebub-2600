@@ -9,6 +9,15 @@
       "user_selected": true,
       "address": "0x30000000",
       "max_size": "0x10000"
+    },
+    {
+      "id": 1,
+      "label": "State",
+      "extensions": ["state"],
+      "optional": true,
+      "dependent_on_0": true,
+      "address": "0x40000000",
+      "max_size": "0x8600"
     }
   ]
 }

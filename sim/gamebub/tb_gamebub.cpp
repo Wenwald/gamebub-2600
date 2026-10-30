@@ -30,8 +30,9 @@
 // --mapper/--sc set the bankswitch settings; --reset-every R uses the Reset
 // setting at the start of every R-th frame. --word-gap G idles G cycles
 // between ROM words (default 0: back to back, the harder case). Each frame
-// line ends with the colour at framebuffer (160, Y), default Y = 56: the
-// test ROMs' status band. --paddle sets the Controller setting to Paddle.
+// line gives the sum and CRC-32 of the displayed frame's RGB bytes and ends
+// with the colour at framebuffer (160, Y), default Y = 56: the test ROMs'
+// status band. --paddle sets the Controller setting to Paddle.
 // --hold holds Game Bub buttons (comma-separated: up, down, left, right, a,
 // b, x, y, l, r, start, select) from CoreRun to the end of the run.
 //
@@ -44,6 +45,17 @@
 // A B": the frames completed in it are frames A..B-1 (frame k is the buffer
 // finished at the k-th swap, counting from 0); they are printed as usual,
 // as they are shown.
+//
+// Save states (--state FILE, --state-out FILE, --ss F:ACTION[,F:ACTION...]):
+// --state loads FILE as file 1 right after the ROM, as the firmware loads
+// "<rom>.state" (files.json; a missing file is skipped). --state-out does
+// what the firmware does when the core exits: CoreHalt, FileReadStart(1) for
+// the size, that many bytes read from 0x4000_0000, FileReadEnd(1), and FILE
+// written (empty for size 0). --ss opens the menu once frame F has been shown,
+// uses Save State (save) or Load State (load), waits kSsWait clocks, closes
+// the menu, and prints "ss <action> after frame F: status S, swaps A B" (S
+// the status register after the action, A..B-1 the frames completed while
+// the menu was open).
 
 #include <cstdint>
 #include <cstdio>
@@ -62,10 +74,12 @@ constexpr int kWidth = 320, kHeight = 240;
 constexpr int kFilterLatency = 2;
 constexpr uint64_t kTicksPerFrame = 228ULL * 262 * 4;
 constexpr uint64_t kMenuWait = kTicksPerFrame * 8;
+constexpr uint64_t kSsWait = kTicksPerFrame * 2;
 
-constexpr uint16_t kCmdGetStatus = 0x0000, kCmdCoreRun = 0x0100, kCmdSetupComplete = 0x0102,
-                   kCmdNotifyFocus = 0x0200, kCmdFileWriteStart = 0x0300,
-                   kCmdFileWriteEnd = 0x0301;
+constexpr uint16_t kCmdGetStatus = 0x0000, kCmdCoreRun = 0x0100, kCmdCoreHalt = 0x0101,
+                   kCmdSetupComplete = 0x0102, kCmdNotifyFocus = 0x0200,
+                   kCmdFileWriteStart = 0x0300, kCmdFileWriteEnd = 0x0301,
+                   kCmdFileReadStart = 0x0302, kCmdFileReadEnd = 0x0303;
 constexpr uint32_t kStatusSetup = 2, kStatusHalt = 3, kStatusRun = 4;
 
 struct Sim {
@@ -251,7 +265,8 @@ int main(int argc, char **argv) {
 	int frames = 60, dump_every = 0, mapper = 0, reset_every = 0, word_gap = 0, px_y = 56;
 	int menu_at = -1;
 	bool sc = false, paddle = false;
-	std::string hold;
+	std::string hold, state_in, state_out;
+	std::vector<std::pair<int, bool>> ss_actions;  // frame, true = save
 	for (int i = 1; i < argc; i++) {
 		std::string a = argv[i];
 		auto next = [&]() { return i + 1 < argc ? argv[++i] : (char *)""; };
@@ -266,6 +281,24 @@ int main(int argc, char **argv) {
 		else if (a == "--paddle") paddle = true;
 		else if (a == "--hold") hold = next();
 		else if (a == "--menu") menu_at = std::atoi(next());
+		else if (a == "--state") state_in = next();
+		else if (a == "--state-out") state_out = next();
+		else if (a == "--ss") {
+			const std::string v = next();
+			for (size_t p = 0; p < v.size();) {
+				size_t end = v.find(',', p);
+				if (end == std::string::npos) end = v.size();
+				const std::string item = v.substr(p, end - p);
+				const size_t colon = item.find(':');
+				const std::string act = colon == std::string::npos ? "" : item.substr(colon + 1);
+				if (act != "save" && act != "load") {
+					std::fprintf(stderr, "--ss wants F:save or F:load, got %s\n", item.c_str());
+					return 2;
+				}
+				ss_actions.push_back({std::atoi(item.c_str()), act == "save"});
+				p = end + 1;
+			}
+		}
 		else if (a[0] != '+') rom_path = a;
 	}
 	if (rom_path.empty()) {
@@ -333,6 +366,30 @@ int main(int argc, char **argv) {
 	const uint64_t load_ticks = s.tick - load_from;
 	r = s.command(kCmdFileWriteEnd, {0, uint32_t(rom.size()), 0});
 	const bool load_failed = r.first;
+
+	// The state file, if there is one (optional, not initialised).
+	if (!state_in.empty()) {
+		std::vector<uint8_t> st;
+		if (FILE *f = std::fopen(state_in.c_str(), "rb")) {
+			uint8_t b[4096];
+			size_t n;
+			while ((n = std::fread(b, 1, sizeof b, f)) > 0) st.insert(st.end(), b, b + n);
+			std::fclose(f);
+			r = s.command(kCmdFileWriteStart, {1});
+			expect(!r.first, "FileWriteStart(state)");
+			for (size_t a = 0; a < st.size(); a += 4) {
+				uint32_t word = 0;
+				for (size_t k = 0; k < 4 && a + k < st.size(); k++) word |= uint32_t(st[a + k]) << (8 * k);
+				s.write(0x40000000 + uint32_t(a), word);
+			}
+			s.idle();
+			r = s.command(kCmdFileWriteEnd, {1, uint32_t(st.size()), 0});
+			expect(!r.first, "FileWriteEnd(state)");
+			std::printf("state file: %zu bytes\n", st.size());
+		} else {
+			std::printf("state file: none\n");
+		}
+	}
 
 	// Settings (the core harness uses difficulty A on both sides).
 	s.write(0x00001000, 1);
@@ -406,8 +463,9 @@ int main(int argc, char **argv) {
 			for (uint8_t b : img) sum += b;
 			const size_t o = (size_t(px_y) * kWidth + 160) * 3;
 			const unsigned px = (img[o] << 16) | (img[o + 1] << 8) | img[o + 2];
-			std::printf("frame %4d  %dx%d written  sum %llu  px %06x\n", frame_no, width, rows,
-			            static_cast<unsigned long long>(sum), px);
+			const unsigned crc = unsigned(crc32(0, img.data(), uInt(img.size())));
+			std::printf("frame %4d  %dx%d written  sum %llu  crc %08x  px %06x\n", frame_no, width, rows,
+			            static_cast<unsigned long long>(sum), crc, px);
 			frame_no++;
 		}
 	};
@@ -459,6 +517,57 @@ int main(int argc, char **argv) {
 			std::printf("menu closed\n");
 			max_ticks += 7 * kMenuWait;
 		}
+
+		for (auto &act : ss_actions) {
+			if (act.first < 0 || frame_no != act.first + 1) continue;
+			const bool save = act.second;
+			const int after = act.first;
+			act.first = -1;
+			r = s.command(kCmdNotifyFocus, {0});
+			expect(!r.first, "NotifyFocus(0)");
+			const size_t swaps = s.frame_rows.size();
+			// While the chain is part-shifted the core's registers hold any
+			// mix of bits, so the RTL's own checks (unique case and the like)
+			// are off until the operation is long done.
+			ctx->assertOn(false);
+			s.write(save ? 0x00002004 : 0x00002008, 1);
+			for (uint64_t t = 0; t < kSsWait; t += 1024) {
+				s.idle(1024);
+				show_frames();
+			}
+			ctx->assertOn(true);
+			const uint32_t st = s.read(0x00000000);
+			s.idle();
+			std::printf("ss %s after frame %d: status %08x, swaps %zu %zu\n", save ? "save" : "load",
+			            after, st, swaps, s.frame_rows.size());
+			r = s.command(kCmdNotifyFocus, {1});
+			expect(!r.first, "NotifyFocus(1)");
+			max_ticks += kSsWait;
+		}
+	}
+
+	// Exit, as the firmware's exit_core: halt, then save the writable files.
+	if (!state_out.empty()) {
+		r = s.command(kCmdCoreHalt);
+		expect(!r.first, "CoreHalt");
+		r = s.command(kCmdFileReadStart, {1});
+		expect(!r.first, "FileReadStart(state)");
+		const uint32_t size = r.second;
+		std::vector<uint8_t> st(size);
+		for (uint32_t a = 0; a < size; a += 4) {
+			const uint32_t word = s.read(0x40000000 + a);
+			for (uint32_t k = 0; k < 4 && a + k < size; k++) st[a + k] = uint8_t(word >> (8 * k));
+		}
+		s.idle();
+		r = s.command(kCmdFileReadEnd, {1});
+		expect(!r.first, "FileReadEnd(state)");
+		FILE *f = std::fopen(state_out.c_str(), "wb");
+		if (!f || std::fwrite(st.data(), 1, st.size(), f) != st.size()) {
+			std::fprintf(stderr, "cannot write %s\n", state_out.c_str());
+			return 2;
+		}
+		std::fclose(f);
+		std::printf("state saved: %u bytes\n", size);
 	}
 
 	std::printf("filter check: %llu pixels, %llu mismatches\n",

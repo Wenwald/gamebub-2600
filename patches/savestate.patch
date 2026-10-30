@@ -1,0 +1,2729 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Mark Schlosser
+#
+# Save states for the 2600 core (hdl/atari2600_core.sv describes them).
+# Applied by scripts/prepare_rtl.py after atari7800_mister.patch, to the copy
+# in build/upstream/; the vendored files stay untouched and keep their MIT
+# notices.
+#
+# Every module of the console that holds registers gets three ports,
+# ss_en/ss_si/ss_so, and every one of its clocked blocks ends with one line
+#
+#     if (ss_en) {ss_so, reg_a, reg_b, ...} <= {reg_a, reg_b, ..., ss_si};
+#
+# so that while ss_en is high all its registers form one shift register
+# (the extra first bit is a chain stage of its own). Modules pass the chain
+# through their submodules first, then through their own blocks, so the
+# registers of the whole console are one chain. Arrays are listed element by
+# element. The memories are not on the chain: the RIOT RAM (second port) and
+# the FA2 work RAM get an ss_mem_* port that ss_hold hands over, and ss_hold
+# also blocks the CPU's RIOT RAM writes.
+#
+# Left off the chain: cpuclk and lfsr_6_instant in TIA.sv (never
+# instantiated), the ARM schemes (not built: NO_ARM_MAPPER), video_mux's
+# blend frame store and the registers only blend uses (the core ties blend
+# off; on the chain they would keep the 64 KB store in the bitstream), and
+# the 7800 parts of top.sv. Instances in cpuclk and in top.sv's Atari7800 module
+# (neither is elaborated here) leave the new ports unconnected, which lint
+# reports as PINMISSING; a 7800 build would connect Atari7800's.
+#
+--- a/rtl/6502/mos6502_ctl.sv
++++ b/rtl/6502/mos6502_ctl.sv
+@@ -91,7 +91,12 @@
+ 	// Bits 0-5 T0/T1X/T2..T5, 6-7 the two extension latches, then
+ 	// t_zero, end_x, res_p and the prefetch gate - the terms that decide them.
+ 	output logic [15:0] dbg_tg,
+-	output logic       dbg_take_int
++	output logic       dbg_take_int,
++
++	// Save-state chain: while ss_en, every register shifts one place.
++	input  logic       ss_en,
++	input  logic       ss_si,
++	output logic       ss_so
+ );
+ 
+ 	// ---- state -------------------------------------------------------------
+@@ -875,9 +880,11 @@
+ 	wire  rdy_cy = phi1_en ? rdy : rdy_q;   // new value at the edge, held after
+ 	assign hold = ~rdy_cy & ~wr_q;
+ 
++	logic ss_c1, ss_c2;  // save-state chain links between the register blocks
+ 	always_ff @(posedge clk_sys) begin
+ 		if (!res_n)      rdy_q <= 1'b1;
+ 		else if (phi1_en) rdy_q <= rdy;
++		if (ss_en) {ss_c1, rdy_q} <= {rdy_q, ss_si};
+ 	end
+ 
+ 	// ACRL1 (net 572): the ALU carry the hold-carry path reads. Every page
+@@ -1328,6 +1335,11 @@
+ 				ext_t6_r <= ext_t6;
+ 			end
+ 		end
++
++		if (ss_en) {ss_c2, irq_p, nmi_p, nmi_l, nmig_c2, res_c2, res_g, vec_n_c2, res_p,
++			sync_short, brk_done_q, tg_c2, sync_c2, end_x_q, ext_t5_r, ext_t6_r} <=
++			{irq_p, nmi_p, nmi_l, nmig_c2, res_c2, res_g, vec_n_c2, res_p,
++			sync_short, brk_done_q, tg_c2, sync_c2, end_x_q, ext_t5_r, ext_t6_r, ss_c1};
+ 	end
+ 
+ 	// NMI is an edge and ignores I; IRQ is a level and does not.
+@@ -1444,6 +1456,11 @@
+ 
+ 			end
+ 		end
++
++		if (ss_en) {ss_so, so_last, so_edge_q, wr_q, sync_q, t, c_reg, int_g, int_armed,
++			br_back_q, ir, pgx, idx_cross_q} <=
++			{so_last, so_edge_q, wr_q, sync_q, t, c_reg, int_g, int_armed,
++			br_back_q, ir, pgx, idx_cross_q, ss_c2};
+ 	end
+ 
+ endmodule
+--- a/rtl/6502/mos6502_dp.sv
++++ b/rtl/6502/mos6502_dp.sv
+@@ -59,7 +59,12 @@
+ 	                                 // control logic decides page crossings
+ 	                                 // during phase 2, when the latched copy
+ 	                                 // is still last cycle's.
+-	output logic [7:0] pcl, pch
++	output logic [7:0] pcl, pch,
++
++	// Save-state chain: while ss_en, every register shifts one place.
++	input  logic       ss_en,
++	input  logic       ss_si,
++	output logic       ss_so
+ );
+ 
+ 	// ---- registers ---------------------------------------------------------
+@@ -312,6 +317,13 @@
+ 			// write a new S from SB at the same time.
+ 			s_out <= c.s_s ? s_out : s_in;
+ 		end
++
++		if (ss_en) {ss_so, x, y, a, s_in, s_out, ai, bi, pcls, pchs, abl, abh, dor,
++			p_n, p_v, p_d, p_i, p_z, p_c, arr_lo_q, arr_hi_q, add, acr, avr, hc_held,
++			dl, pcl, pch} <=
++			{x, y, a, s_in, s_out, ai, bi, pcls, pchs, abl, abh, dor,
++			p_n, p_v, p_d, p_i, p_z, p_c, arr_lo_q, arr_hi_q, add, acr, avr, hc_held,
++			dl, pcl, pch, ss_si};
+ 	end
+ 
+ 	assign acr_now  = alu_acr;
+--- a/rtl/6502/mos6502.sv
++++ b/rtl/6502/mos6502.sv
+@@ -75,7 +75,12 @@
+ 	output logic [15:0] dbg_pc,
+ 	output logic  [3:0] dbg_t,
+ 	output logic        dbg_hold, dbg_int_active, dbg_take_int, dbg_res_active,
+-	output logic [15:0] dbg_tg
++	output logic [15:0] dbg_tg,
++
++	// ---- save-state chain: while ss_en, every register shifts one place --
++	input  logic        ss_en,
++	input  logic        ss_si,
++	output logic        ss_so
+ );
+ 
+ 	ctl_t       c;
+@@ -83,6 +88,7 @@
+ 	logic [7:0] ir;
+ 	logic [7:0] a, x, y, s, p, dl, pcl, pch;
+ 	logic       acr_now;
++	logic       ss_ctl, ss_dp, ss_c1;  // save-state chain links
+ 
+ 	mos6502_ctl #(.BCD_EN(BCD_EN)) ctl (
+ 		.clk_sys(clk_sys), .phi1_en(phi1_en), .phi2_en(phi2_en),
+@@ -91,7 +97,8 @@
+ 		.c(c), .ir(ir), .sync(sync_ctl), .jammed(jammed),
+ 		.dbg_t(dbg_t), .dbg_hold(dbg_hold),
+ 		.dbg_int_active(dbg_int_active), .dbg_take_int(dbg_take_int),
+-		.dbg_res_active(dbg_res_active), .dbg_tg(dbg_tg)
++		.dbg_res_active(dbg_res_active), .dbg_tg(dbg_tg),
++		.ss_en(ss_en), .ss_si(ss_si), .ss_so(ss_ctl)
+ 	);
+ 
+ 	mos6502_dp #(.BCD_EN(BCD_EN)) dp (
+@@ -99,7 +106,8 @@
+ 		.c(c), .ir(ir), .data_in(data_in),
+ 		.a(a), .x(x), .y(y), .s(s), .p(p), .dl(dl),
+ 		.addr_out(addr_out), .data_out(data_out),
+-		.acr_now(acr_now), .pcl(pcl), .pch(pch)
++		.acr_now(acr_now), .pcl(pcl), .pch(pch),
++		.ss_en(ss_en), .ss_si(ss_ctl), .ss_so(ss_dp)
+ 	);
+ 
+ 	assign dbg_a  = a;   assign dbg_x = x;  assign dbg_y = y;
+@@ -112,6 +120,7 @@
+ 	always_ff @(posedge clk_sys) begin
+ 		if      (phi1_en) phase2 <= 1'b0;
+ 		else if (phi2_en) phase2 <= 1'b1;
++		if (ss_en) {ss_c1, phase2} <= {phase2, ss_dp};
+ 	end
+ 
+ 	assign phi1_out = ~phase2;
+@@ -132,6 +141,7 @@
+ 			wr_pin   <= c.wr;
+ 			sync_pin <= sync_ctl;
+ 		end
++		if (ss_en) {ss_so, wr_pin, sync_pin} <= {wr_pin, sync_pin, ss_c1};
+ 	end
+ 
+ 	assign rw_n = ~wr_pin;
+--- a/rtl/6502/sally.sv
++++ b/rtl/6502/sally.sv
+@@ -126,9 +126,16 @@
+ 	// Debug only, passed straight through from the core. Nothing on the board
+ 	// has anything like these.
+ 	output logic  [7:0] dbg_a, dbg_x, dbg_y, dbg_s, dbg_p, dbg_ir,
+-	output logic [15:0] dbg_pc
++	output logic [15:0] dbg_pc,
++
++	// Save-state chain: while ss_en, every register shifts one place.
++	input  logic        ss_en,
++	input  logic        ss_si,
++	output logic        ss_so
+ );
+ 
++	logic ss_c1, ss_core;  // save-state chain links
++
+ 	// The 7474 pair. Two phase-2 samples in, two out; MARIA holds halt_n low
+ 	// for a whole number of CPU cycles, so the release is symmetric with the
+ 	// assertion.
+@@ -142,6 +149,7 @@
+ 			halt_s   <= ~halt_n;
+ 			halt_bus <= halt_s;
+ 		end
++		if (ss_en) {ss_c1, halt_s, halt_bus} <= {halt_s, halt_bus, ss_si};
+ 	end
+ 
+ 	logic core_data_oe;
+@@ -205,6 +213,7 @@
+ 	always_ff @(posedge clk_sys) begin
+ 		if      (phi1_en) phase2 <= 1'b0;
+ 		else if (phi2_en) phase2 <= 1'b1;
++		if (ss_en) {ss_so, phase2} <= {phase2, ss_core};
+ 	end
+ 
+ 	assign phi1_out = ~phase2;
+@@ -232,7 +241,8 @@
+ 		.dbg_a (dbg_a), .dbg_x (dbg_x), .dbg_y(dbg_y), .dbg_s(dbg_s),
+ 		.dbg_p (dbg_p), .dbg_ir(dbg_ir), .dbg_pc(dbg_pc),
+ 		.dbg_t (), .dbg_hold(), .dbg_int_active(), .dbg_take_int(),
+-		.dbg_res_active(), .dbg_tg()
++		.dbg_res_active(), .dbg_tg(),
++		.ss_en (ss_en), .ss_si (ss_c1), .ss_so (ss_core)
+ 	);
+ 
+ endmodule
+--- a/rtl/banks2600.sv
++++ b/rtl/banks2600.sv
+@@ -42,7 +42,11 @@
+ 	output          ram_sel,
+ 	output          ram_rw,
+ 	output  [17:0]  ram_a,
+-	output  [18:0]  rom_a
++	output  [18:0]  rom_a,
++	// Save-state chain: while ss_en, every register shifts one place.
++	input           ss_en,
++	input           ss_si,
++	output logic    ss_so
+ );
+ 	assign flags_out = 16'd0;
+ 	assign d_out = 8'd0;
+@@ -63,6 +67,7 @@
+ 		end
+ 		if (reset)
+ 			bank <= 1;
++		if (ss_en) {ss_so, bank} <= {bank, ss_si};
+ 	end
+ 
+ 	assign rom_a = {3'd0, bank, a_in[11:0]};
+@@ -83,7 +88,11 @@
+ 	output          ram_sel,
+ 	output          ram_rw,
+ 	output  [17:0]  ram_a,
+-	output  [18:0]  rom_a
++	output  [18:0]  rom_a,
++	// Save-state chain: while ss_en, every register shifts one place.
++	input           ss_en,
++	input           ss_si,
++	output logic    ss_so
+ );
+ 	assign flags_out = 16'd0;
+ 	assign d_out = 8'd0;
+@@ -106,6 +115,7 @@
+ 		end
+ 		if (reset)
+ 			bank <= 0;
++		if (ss_en) {ss_so, bank} <= {bank, ss_si};
+ 	end
+ 
+ 	assign rom_a = {2'd0, bank, a_in[11:0]};
+@@ -128,7 +138,11 @@
+ 	output  [17:0]  ram_a,
+ 	output  [18:0]  rom_a,
+ 	// Special
+-	input           ce
++	input           ce,
++	// Save-state chain: while ss_en, every register shifts one place.
++	input           ss_en,
++	input           ss_si,
++	output logic    ss_so
+ );
+ 	assign flags_out = 16'd0;
+ 	assign d_out = 8'd0;
+@@ -155,6 +169,7 @@
+ 			bank <= 0;
+ 			latch_next <= 0;
+ 		end
++		if (ss_en) {ss_so, bank, latch_next} <= {bank, latch_next, ss_si};
+ 	end
+ 
+ 	assign rom_a = {3'd0, bank, a_in[11:0]};
+@@ -175,7 +190,11 @@
+ 	output          ram_sel,
+ 	output          ram_rw,
+ 	output  [17:0]  ram_a,
+-	output  [18:0]  rom_a
++	output  [18:0]  rom_a,
++	// Save-state chain: while ss_en, every register shifts one place.
++	input           ss_en,
++	input           ss_si,
++	output logic    ss_so
+ );
+ 	assign flags_out = 16'd0;
+ 	assign d_out = 8'd0;
+@@ -198,6 +217,7 @@
+ 		end
+ 		if (reset)
+ 			banks <= '{3'd0, 3'd0, 3'd0};
++		if (ss_en) {ss_so, banks[0], banks[1], banks[2]} <= {banks[0], banks[1], banks[2], ss_si};
+ 	end
+ 
+ 	always_comb begin
+@@ -227,7 +247,11 @@
+ 	output          ram_sel,
+ 	output          ram_rw,
+ 	output  [17:0]  ram_a,
+-	output  [18:0]  rom_a
++	output  [18:0]  rom_a,
++	// Save-state chain: while ss_en, every register shifts one place.
++	input           ss_en,
++	input           ss_si,
++	output logic    ss_so
+ );
+ 	assign flags_out = 16'd0;
+ 	assign d_out = 8'd0;
+@@ -249,6 +273,7 @@
+ 
+ 		if (reset)
+ 			bank <= '0;
++		if (ss_en) {ss_so, bank} <= {bank, ss_si};
+ 	end
+ 
+ 	assign rom_a = {current_bank, a_in[10:0]};
+@@ -269,7 +294,11 @@
+ 	output          ram_sel,
+ 	output          ram_rw,
+ 	output  [17:0]  ram_a,
+-	output  [18:0]  rom_a
++	output  [18:0]  rom_a,
++	// Save-state chain: while ss_en, every register shifts one place.
++	input           ss_en,
++	input           ss_si,
++	output logic    ss_so
+ );
+ 	assign flags_out = 16'd0;
+ 	assign d_out = 8'd0;
+@@ -296,6 +325,7 @@
+ 		end
+ 		if (reset)
+ 			bank <= 0;
++		if (ss_en) {ss_so, bank} <= {bank, ss_si};
+ 	end
+ 
+ 	assign rom_a = {1'd0, bank, a_in[11:0]};
+@@ -318,8 +348,13 @@
+ 	output  [17:0]  ram_a,
+ 	output  [18:0]  rom_a,
+ 	// Special
+-	input           ce
++	input           ce,
++	// Save-state chain: while ss_en, every register shifts one place.
++	input           ss_en,
++	input           ss_si,
++	output logic    ss_so
+ );
++	logic ss_c1;  // save-state chain links between the blocks below
+ 	logic direct_en, rom_en, and_do_en, music_en;
+ 	logic bank;
+ 	logic [10:0] counters[8];
+@@ -437,6 +472,20 @@
+ 			music_clock <= '0;
+ 			music_div <= '0;
+ 		end
++		if (ss_en) {ss_c1,
++			rom_a_next, rand_val, bank, music_modes, music_div, music_clock, counters[0],
++			counters[1], counters[2], counters[3], counters[4], counters[5], counters[6],
++			counters[7], tops[0], tops[1], tops[2], tops[3], tops[4], tops[5],
++			tops[6], tops[7], bottoms[0], bottoms[1], bottoms[2], bottoms[3], bottoms[4],
++			bottoms[5], bottoms[6], bottoms[7], flags[0], flags[1], flags[2], flags[3],
++			flags[4], flags[5], flags[6], flags[7]} <=
++			{rom_a_next, rand_val, bank, music_modes, music_div, music_clock, counters[0],
++			counters[1], counters[2], counters[3], counters[4], counters[5], counters[6],
++			counters[7], tops[0], tops[1], tops[2], tops[3], tops[4], tops[5],
++			tops[6], tops[7], bottoms[0], bottoms[1], bottoms[2], bottoms[3], bottoms[4],
++			bottoms[5], bottoms[6], bottoms[7], flags[0], flags[1], flags[2], flags[3],
++			flags[4], flags[5], flags[6], flags[7],
++			ss_si};
+ 	end
+ 
+ 
+@@ -498,6 +547,12 @@
+ 			mod_rem   <= '{3{8'd0}};
+ 			music_rem <= '{3{8'd0}};
+ 		end
++		if (ss_en) {ss_so,
++			mod_num, mod_step, mod_run, mod_rem[0], mod_rem[1], mod_rem[2], music_rem[0],
++			music_rem[1], music_rem[2]} <=
++			{mod_num, mod_step, mod_run, mod_rem[0], mod_rem[1], mod_rem[2], music_rem[0],
++			music_rem[1], music_rem[2],
++			ss_c1};
+ 	end
+ 
+ endmodule
+@@ -538,7 +593,11 @@
+ 	output  [18:0]  rom_a,
+ 	// Special
+ 	input           ce,        // 3.579 mhz
+-	input   [7:0]   rom_do
++	input   [7:0]   rom_do,
++	// Save-state chain: while ss_en, every register shifts one place.
++	input           ss_en,
++	input           ss_si,
++	output logic    ss_so
+ );
+ 	// What the Harmony's flash costs: half a second to read, one to write.
+ 	localparam [21:0] READ_DELAY  = 22'd1789772;
+@@ -627,6 +686,10 @@
+ 			busy <= 1'b0;
+ 			busy_timer <= 22'd0;
+ 		end
++		if (ss_en) {ss_so,
++			bank, operation, error_code, random, tune_pos, busy, busy_timer} <=
++			{bank, operation, error_code, random, tune_pos, busy, busy_timer,
++			ss_si};
+ 	end
+ 
+ endmodule
+@@ -645,7 +708,11 @@
+ 	output          ram_sel,
+ 	output          ram_rw,
+ 	output  [17:0]  ram_a,
+-	output  [18:0]  rom_a
++	output  [18:0]  rom_a,
++	// Save-state chain: while ss_en, every register shifts one place.
++	input           ss_en,
++	input           ss_si,
++	output logic    ss_so
+ );
+ 	assign flags_out = 16'd0;
+ 	assign d_out = 8'd0;
+@@ -667,6 +734,7 @@
+ 		end
+ 		if (reset)
+ 			bank <= 0;
++		if (ss_en) {ss_so, bank} <= {bank, ss_si};
+ 	end
+ 
+ 	assign rom_a = {2'd0, bank, a_in[11:0]};
+@@ -742,7 +810,11 @@
+ 	output  [17:0]  ram_a,
+ 	output  [18:0]  rom_a,
+ 	// special
+-	input           swapped // Swapped flag for the UASW mapper (Mickey)
++	input           swapped, // Swapped flag for the UASW mapper (Mickey)
++	// Save-state chain: while ss_en, every register shifts one place.
++	input           ss_en,
++	input           ss_si,
++	output logic    ss_so
+ );
+ 	assign flags_out = 16'd0;
+ 	assign d_out = 8'd0;
+@@ -763,6 +835,7 @@
+ 		end
+ 		if (reset)
+ 			bank <= 0;
++		if (ss_en) {ss_so, bank} <= {bank, ss_si};
+ 	end
+ 
+ 	assign rom_a = {3'd0, bank, a_in[11:0]};
+@@ -783,7 +856,11 @@
+ 	output          ram_sel,
+ 	output          ram_rw,
+ 	output  [17:0]  ram_a,
+-	output  logic [18:0]  rom_a
++	output  logic [18:0]  rom_a,
++	// Save-state chain: while ss_en, every register shifts one place.
++	input           ss_en,
++	input           ss_si,
++	output logic    ss_so
+ );
+ 	logic [2:0] bank;
+ 	logic [1:0] ram_bank;
+@@ -818,6 +895,7 @@
+ 			bank <= 0;
+ 			ram_bank <= 0;
+ 		end
++		if (ss_en) {ss_so, bank, ram_bank} <= {bank, ram_bank, ss_si};
+ 	end
+ 
+ endmodule
+@@ -836,7 +914,11 @@
+ 	output          ram_sel,
+ 	output          ram_rw,
+ 	output  [17:0]  ram_a,
+-	output  [18:0]  rom_a
++	output  [18:0]  rom_a,
++	// Save-state chain: while ss_en, every register shifts one place.
++	input           ss_en,
++	input           ss_si,
++	output logic    ss_so
+ );
+ 	assign flags_out = 16'd0;
+ 	assign d_out = 8'd0;
+@@ -855,6 +937,7 @@
+ 		if (reset) begin
+ 			bank <= 0;
+ 		end
++		if (ss_en) {ss_so, bank} <= {bank, ss_si};
+ 	end
+ 	assign rom_a = {bank, a_in[11:0]};
+ 
+@@ -876,7 +959,11 @@
+ 	output  [17:0]  ram_a,
+ 	output  [18:0]  rom_a,
+ 	// Special
+-	input           cold_reset
++	input           cold_reset,
++	// Save-state chain: while ss_en, every register shifts one place.
++	input           ss_en,
++	input           ss_si,
++	output logic    ss_so
+ );
+ 	assign flags_out = 16'd0;
+ 	assign d_out = 8'd0;
+@@ -894,6 +981,7 @@
+ 			bank <= bank + 1'd1;
+ 		if (cold_reset)
+ 			bank <= 0;
++		if (ss_en) {ss_so, bank, old_reset} <= {bank, old_reset, ss_si};
+ 	end
+ 	assign rom_a = {bank, a_in[10:0]};
+ 
+@@ -921,7 +1009,11 @@
+ 	input   [1:0]   tape_in,
+ 	input           fix_sc_cs,
+ 	output  logic   audio_data,
+-	input   [18:0]  rom_size
++	input   [18:0]  rom_size,
++	// Save-state chain: while ss_en, every register shifts one place.
++	input           ss_en,
++	input           ss_si,
++	output logic    ss_so
+ );
+ 	// These numbers represent ONE HALF the cycles
+ 	// needed to achieve 340us for a 1 bit, and 227us for a 0 bit.
+@@ -1226,6 +1318,42 @@
+ 			we_cycle <= '0;
+ 			//rom_en <= 1;
+ 		end
++		if (ss_en) {ss_so,
++			audio_data, fetch_byte, playback, audio_timer, eq_tone, state_count,
++			bit_position, current_bit, header_a, pre_fetch_byte, page_position,
++			bank_a, tape_num, state, state_next, page_count, block_checksum, audio_buffer,
++			cooldown, we_cycle, bank, ram_we, we_byte, header_array[0], header_array[1],
++			header_array[2], header_array[3], header_array[4], header_array[5],
++			header_array[6], header_array[7], block_byte_array[0], block_byte_array[1],
++			block_byte_array[2], block_byte_array[3], block_byte_array[4], block_byte_array[5],
++			block_byte_array[6], block_byte_array[7], block_byte_array[8], block_byte_array[9],
++			block_byte_array[10], block_byte_array[11], block_byte_array[12], block_byte_array[13],
++			block_byte_array[14], block_byte_array[15], block_byte_array[16], block_byte_array[17],
++			block_byte_array[18], block_byte_array[19], block_byte_array[20], block_byte_array[21],
++			block_byte_array[22], block_byte_array[23], cs_array[0], cs_array[1],
++			cs_array[2], cs_array[3], cs_array[4], cs_array[5], cs_array[6], cs_array[7],
++			cs_array[8], cs_array[9], cs_array[10], cs_array[11], cs_array[12],
++			cs_array[13], cs_array[14], cs_array[15], cs_array[16], cs_array[17],
++			cs_array[18], cs_array[19], cs_array[20], cs_array[21], cs_array[22],
++			cs_array[23]} <=
++			{audio_data, fetch_byte, playback, audio_timer, eq_tone, state_count,
++			bit_position, current_bit, header_a, pre_fetch_byte, page_position,
++			bank_a, tape_num, state, state_next, page_count, block_checksum, audio_buffer,
++			cooldown, we_cycle, bank, ram_we, we_byte, header_array[0], header_array[1],
++			header_array[2], header_array[3], header_array[4], header_array[5],
++			header_array[6], header_array[7], block_byte_array[0], block_byte_array[1],
++			block_byte_array[2], block_byte_array[3], block_byte_array[4], block_byte_array[5],
++			block_byte_array[6], block_byte_array[7], block_byte_array[8], block_byte_array[9],
++			block_byte_array[10], block_byte_array[11], block_byte_array[12], block_byte_array[13],
++			block_byte_array[14], block_byte_array[15], block_byte_array[16], block_byte_array[17],
++			block_byte_array[18], block_byte_array[19], block_byte_array[20], block_byte_array[21],
++			block_byte_array[22], block_byte_array[23], cs_array[0], cs_array[1],
++			cs_array[2], cs_array[3], cs_array[4], cs_array[5], cs_array[6], cs_array[7],
++			cs_array[8], cs_array[9], cs_array[10], cs_array[11], cs_array[12],
++			cs_array[13], cs_array[14], cs_array[15], cs_array[16], cs_array[17],
++			cs_array[18], cs_array[19], cs_array[20], cs_array[21], cs_array[22],
++			cs_array[23],
++			ss_si};
+ 	end
+ 
+ endmodule
+@@ -1246,7 +1374,11 @@
+ 	output  [17:0]  ram_a,
+ 	output  [18:0]  rom_a,
+ 	// special
+-	input           swapped // 8195-byte dumps have 1K banks 2 and 3 swapped
++	input           swapped, // 8195-byte dumps have 1K banks 2 and 3 swapped
++	// Save-state chain: while ss_en, every register shifts one place.
++	input           ss_en,
++	input           ss_si,
++	output logic    ss_so
+ );
+ 	logic [2:0] bank_config;
+ 	logic [3:0] pending_switch;
+@@ -1295,6 +1427,10 @@
+ 			pending_switch <= 0;
+ 			banks <= bank_lut[0];
+ 		end
++		if (ss_en) {ss_so,
++			bank_config, pending_switch, banks[0], banks[1], banks[2], banks[3]} <=
++			{bank_config, pending_switch, banks[0], banks[1], banks[2], banks[3],
++			ss_si};
+ 	end
+ endmodule
+ 
+@@ -1314,7 +1450,11 @@
+ 	output  [17:0]  ram_a,
+ 	output  [18:0]  rom_a,
+ 	// special
+-	input   [18:0]  rom_size
++	input   [18:0]  rom_size,
++	// Save-state chain: while ss_en, every register shifts one place.
++	input           ss_en,
++	input           ss_si,
++	output logic    ss_so
+ );
+ 	assign flags_out = 16'd0;
+ 	assign d_out = 8'd0;
+@@ -1347,6 +1487,7 @@
+ 			ram_bank <= 4'd0;
+ 			ram_en <= 0;
+ 		end
++		if (ss_en) {ss_so, bank, ram_bank, ram_en} <= {bank, ram_bank, ram_en, ss_si};
+ 	end
+ 
+ 	assign rom_a = {current_bank, a_in[10:0]};
+@@ -1367,7 +1508,11 @@
+ 	output          ram_sel,
+ 	output          ram_rw,
+ 	output  [17:0]  ram_a,
+-	output  [18:0]  rom_a
++	output  [18:0]  rom_a,
++	// Save-state chain: while ss_en, every register shifts one place.
++	input           ss_en,
++	input           ss_si,
++	output logic    ss_so
+ );
+ 	assign flags_out = 16'd0;
+ 	assign d_out = 8'd0;
+@@ -1386,6 +1531,7 @@
+ 
+ 		if (reset)
+ 			bank <= 3'd0;
++		if (ss_en) {ss_so, bank} <= {bank, ss_si};
+ 	end
+ 
+ 	assign rom_a = {bank, a_in[11:0]};
+@@ -1406,7 +1552,11 @@
+ 	output          ram_sel,
+ 	output          ram_rw,
+ 	output  [17:0]  ram_a,
+-	output  [18:0]  rom_a
++	output  [18:0]  rom_a,
++	// Save-state chain: while ss_en, every register shifts one place.
++	input           ss_en,
++	input           ss_si,
++	output logic    ss_so
+ );
+ 	assign flags_out = 16'd0;
+ 	assign d_out = 8'd0;
+@@ -1425,6 +1575,7 @@
+ 
+ 		if (reset)
+ 			bank <= 0;
++		if (ss_en) {ss_so, bank} <= {bank, ss_si};
+ 	end
+ 
+ 	assign rom_a = {bank, a_in[11:0]};
+@@ -1445,7 +1596,11 @@
+ 	output          ram_sel,
+ 	output          ram_rw,
+ 	output  [17:0]  ram_a,
+-	output  [18:0]  rom_a
++	output  [18:0]  rom_a,
++	// Save-state chain: while ss_en, every register shifts one place.
++	input           ss_en,
++	input           ss_si,
++	output logic    ss_so
+ );
+ 	assign flags_out = 16'd0;
+ 	assign d_out = 8'd0;
+@@ -1468,6 +1623,7 @@
+ 		end
+ 		if (reset)
+ 			bank <= 2'd1;
++		if (ss_en) {ss_so, bank} <= {bank, ss_si};
+ 	end
+ 
+ 	assign rom_a = {2'd0, bank, a_in[11:0]};
+@@ -1512,7 +1668,11 @@
+ 	output          ram_sel,
+ 	output          ram_rw,
+ 	output  [17:0]  ram_a,
+-	output  [18:0]  rom_a
++	output  [18:0]  rom_a,
++	// Save-state chain: while ss_en, every register shifts one place.
++	input           ss_en,
++	input           ss_si,
++	output logic    ss_so
+ );
+ 	assign flags_out = 16'd0;
+ 	assign d_out = 8'd0;
+@@ -1528,6 +1688,7 @@
+ 			bank <= a_in[6];
+ 		if (reset)
+ 			bank <= 0;
++		if (ss_en) {ss_so, bank} <= {bank, ss_si};
+ 	end
+ 
+ 	assign rom_a = {6'd0, bank, a_in[11:0]};
+@@ -1555,7 +1716,11 @@
+ 	output  [17:0]  ram_a,
+ 	output  [18:0]  rom_a,
+ 	// special
+-	input   [31:0]  rom_size
++	input   [31:0]  rom_size,
++	// Save-state chain: while ss_en, every register shifts one place.
++	input           ss_en,
++	input           ss_si,
++	output logic    ss_so
+ );
+ 	assign flags_out = 16'd0;
+ 	assign d_out = 8'd0;
+@@ -1585,6 +1750,7 @@
+ 			lo <= 0;
+ 			hi <= 0;
+ 		end
++		if (ss_en) {ss_so, bank, lo, hi} <= {bank, lo, hi, ss_si};
+ 	end
+ 
+ 	assign rom_a = {4'd0, bank, a_in[11:0]};
+@@ -1609,7 +1775,11 @@
+ 	output  [17:0]  ram_a,
+ 	output  [18:0]  rom_a,
+ 	// special
+-	input           big  // 256K image: BF rather than DF
++	input           big, // 256K image: BF rather than DF
++	// Save-state chain: while ss_en, every register shifts one place.
++	input           ss_en,
++	input           ss_si,
++	output logic    ss_so
+ );
+ 	assign flags_out = 16'd0;
+ 	assign d_out = 8'd0;
+@@ -1629,6 +1799,7 @@
+ 		end
+ 		if (reset)
+ 			bank <= big ? 6'd1 : 6'd15;
++		if (ss_en) {ss_so, bank} <= {bank, ss_si};
+ 	end
+ 
+ 	assign rom_a = {1'b0, bank, a_in[11:0]};
+@@ -1656,7 +1827,11 @@
+ 	output  [18:0]  rom_a,
+ 	// special
+ 	input           load_start,
+-	input   [31:0]  rom_size
++	input   [31:0]  rom_size,
++	// Save-state chain: while ss_en, every register shifts one place.
++	input           ss_en,
++	input           ss_si,
++	output logic    ss_so
+ );
+ 	assign flags_out = 16'd0;
+ 	assign d_out = 8'd0;
+@@ -1694,6 +1869,7 @@
+ 		end
+ 		if (reset)
+ 			bank <= 1;
++		if (ss_en) {ss_so, game, bank, reset_d, armed} <= {game, bank, reset_d, armed, ss_si};
+ 	end
+ 
+ 	generate
+--- a/rtl/cart2600.sv
++++ b/rtl/cart2600.sv
+@@ -116,8 +116,29 @@
+ 	// Tape Signals
+ 	output          tape_audio, // Tape audio output
+ 	input    [1:0]  tape_in,    // ADC tape input
+-	input           fix_sc_cs   // Fix Supercharger Checksums menu option
++	input           fix_sc_cs,  // Fix Supercharger Checksums menu option
++
++	// Save states. While ss_hold the FA2 work RAM belongs to ss_mem_* (q one
++	// clock after the address); while ss_en every register shifts one place
++	// along the chain, ss_si in, ss_so out.
++	input           ss_hold,
++	input           ss_en,
++	input           ss_si,
++	output logic    ss_so,
++	input    [7:0]  ss_mem_addr,
++	input           ss_mem_we,
++	input    [7:0]  ss_mem_wdata,
++	output   [7:0]  ss_mem_q
+ );
++	// Save-state chain through the mappers below, then this module's own
++	// registers.
++	logic ss_c1, ss_c2;
++	logic ss_mapper_CTY, ss_mapper_F8, ss_mapper_F6, ss_mapper_FE, ss_mapper_E0,
++	      ss_mapper_3F, ss_mapper_F4, ss_mapper_P2, ss_mapper_FA, ss_mapper_FA2,
++	      ss_mapper_UA, ss_mapper_E7, ss_mapper_F0, ss_mapper_32, ss_mapper_AR,
++	      ss_mapper_WD, ss_mapper_3E, ss_mapper_SB, ss_mapper_EF, ss_mapper_0840,
++	      ss_mapper_FC, ss_mapper_DF, ss_mapper_MC_MC2K, ss_mapper_MC_MC4K,
++	      ss_mapper_MC_MC8K, ss_mapper_JANE;
+ 	`define NUM_MAPPERS BANKEND
+ 
+ 	// Muxxing signals
+@@ -246,10 +267,12 @@
+ 			access_taken <= 1'b0;
+ 		else if (phi2)
+ 			access_taken <= 1'b1;
++		if (ss_en) {ss_c1, access_taken} <= {access_taken, ss_mapper_JANE};
+ 	end
+ 
+ 	always @(posedge clk) begin :reset_2600_cart
+ 		old_ain <= a_in;
++		if (ss_en) {ss_c2, old_ain} <= {old_ain, ss_c1};
+ 	end
+ 
+ 	// Bank CTY is compatible with F4 minus the ARM enhanced music
+@@ -269,7 +292,10 @@
+ 		.ram_a      (ram_a[BANKCTY]),
+ 		.rom_a      (rom_addr[BANKCTY]),
+ 		.ce         (ce),
+-		.rom_do     (rom_do)
++		.rom_do     (rom_do),
++		.ss_en      (ss_en),
++		.ss_si      (ss_si),
++		.ss_so      (ss_mapper_CTY)
+ 	);
+ 
+ 	logic [5:0] cdf_table_index;
+@@ -562,6 +588,7 @@
+ 			load_end_d <= 1'b0;
+ 		else
+ 			load_end_d <= load_end;
++		if (ss_en) {ss_so, load_end_d} <= {load_end_d, ss_c2};
+ 	end
+ 
+ 	assign table_family = mapper == BANKBUS ? 2'd1 :
+@@ -1012,7 +1039,10 @@
+ 		.ram_sel    (ram_sel[BANKF8]),
+ 		.ram_rw     (ram_rw[BANKF8]),
+ 		.ram_a      (ram_a[BANKF8]),
+-		.rom_a      (rom_addr[BANKF8])
++		.rom_a      (rom_addr[BANKF8]),
++		.ss_en      (ss_en),
++		.ss_si      (ss_mapper_CTY),
++		.ss_so      (ss_mapper_F8)
+ 	);
+ 
+ 	mapper_F6 mapper_F6
+@@ -1029,7 +1059,10 @@
+ 		.ram_sel    (ram_sel[BANKF6]),
+ 		.ram_rw     (ram_rw[BANKF6]),
+ 		.ram_a      (ram_a[BANKF6]),
+-		.rom_a      (rom_addr[BANKF6])
++		.rom_a      (rom_addr[BANKF6]),
++		.ss_en      (ss_en),
++		.ss_si      (ss_mapper_F8),
++		.ss_so      (ss_mapper_F6)
+ 	);
+ 
+ 	mapper_FE mapper_FE
+@@ -1047,7 +1080,10 @@
+ 		.ram_rw     (ram_rw[BANKFE]),
+ 		.ram_a      (ram_a[BANKFE]),
+ 		.rom_a      (rom_addr[BANKFE]),
+-		.ce         (phi1)
++		.ce         (phi1),
++		.ss_en      (ss_en),
++		.ss_si      (ss_mapper_F6),
++		.ss_so      (ss_mapper_FE)
+ 	);
+ 
+ 	mapper_E0 mapper_E0
+@@ -1064,7 +1100,10 @@
+ 		.ram_sel    (ram_sel[BANKE0]),
+ 		.ram_rw     (ram_rw[BANKE0]),
+ 		.ram_a      (ram_a[BANKE0]),
+-		.rom_a      (rom_addr[BANKE0])
++		.rom_a      (rom_addr[BANKE0]),
++		.ss_en      (ss_en),
++		.ss_si      (ss_mapper_FE),
++		.ss_so      (ss_mapper_E0)
+ 	);
+ 
+ 	mapper_3F mapper_3F
+@@ -1081,7 +1120,10 @@
+ 		.ram_sel    (ram_sel[BANK3F]),
+ 		.ram_rw     (ram_rw[BANK3F]),
+ 		.ram_a      (ram_a[BANK3F]),
+-		.rom_a      (rom_addr[BANK3F])
++		.rom_a      (rom_addr[BANK3F]),
++		.ss_en      (ss_en),
++		.ss_si      (ss_mapper_E0),
++		.ss_so      (ss_mapper_3F)
+ 	);
+ 
+ 	mapper_F4 mapper_F4
+@@ -1098,7 +1140,10 @@
+ 		.ram_sel    (ram_sel[BANKF4]),
+ 		.ram_rw     (ram_rw[BANKF4]),
+ 		.ram_a      (ram_a[BANKF4]),
+-		.rom_a      (rom_addr[BANKF4])
++		.rom_a      (rom_addr[BANKF4]),
++		.ss_en      (ss_en),
++		.ss_si      (ss_mapper_3F),
++		.ss_so      (ss_mapper_F4)
+ 	);
+ 
+ 	mapper_P2 mapper_P2
+@@ -1116,7 +1161,10 @@
+ 		.ram_rw     (ram_rw[BANKP2]),
+ 		.ram_a      (ram_a[BANKP2]),
+ 		.rom_a      (rom_addr[BANKP2]),
+-		.ce         (ce)
++		.ce         (ce),
++		.ss_en      (ss_en),
++		.ss_si      (ss_mapper_F4),
++		.ss_so      (ss_mapper_P2)
+ 	);
+ 
+ 	mapper_FA mapper_FA
+@@ -1133,7 +1181,10 @@
+ 		.ram_sel    (ram_sel[BANKFA]),
+ 		.ram_rw     (ram_rw[BANKFA]),
+ 		.ram_a      (ram_a[BANKFA]),
+-		.rom_a      (rom_addr[BANKFA])
++		.rom_a      (rom_addr[BANKFA]),
++		.ss_en      (ss_en),
++		.ss_si      (ss_mapper_P2),
++		.ss_so      (ss_mapper_FA)
+ 	);
+ 
+ 	mapper_fa2 mapper_FA2
+@@ -1157,7 +1208,15 @@
+ 		.nvram_wdata   (fa2_nvram_wdata_raw),
+ 		.nvram_rdata   (fa2_nvram_rdata),
+ 		.nvram_ready   (fa2_nvram_ready),
+-		.nvram_dirty   (fa2_nvram_dirty_raw)
++		.nvram_dirty   (fa2_nvram_dirty_raw),
++		.ss_hold       (ss_hold),
++		.ss_mem_addr   (ss_mem_addr),
++		.ss_mem_we     (ss_mem_we),
++		.ss_mem_wdata  (ss_mem_wdata),
++		.ss_mem_q      (ss_mem_q),
++		.ss_en         (ss_en),
++		.ss_si         (ss_mapper_FA),
++		.ss_so         (ss_mapper_FA2)
+ 	);
+ 	assign ram_sel[BANKFA2] = 1'b0;
+ 	assign ram_rw[BANKFA2] = 1'b1;
+@@ -1214,7 +1273,10 @@
+ 		.rom_a      (rom_addr[BANKUA]),
+ 		// UASW (Mickey) swaps the two bank-select addresses. Carried on the
+ 		// revision like DPC+'s stable_fractional; revision 0 is plain UA.
+-		.swapped    (mapper_revision[0])
++		.swapped    (mapper_revision[0]),
++		.ss_en      (ss_en),
++		.ss_si      (ss_mapper_FA2),
++		.ss_so      (ss_mapper_UA)
+ 	);
+ 
+ 	mapper_E7 mapper_E7
+@@ -1231,7 +1293,10 @@
+ 		.ram_sel    (ram_sel[BANKE7]),
+ 		.ram_rw     (ram_rw[BANKE7]),
+ 		.ram_a      (ram_a[BANKE7]),
+-		.rom_a      (rom_addr[BANKE7])
++		.rom_a      (rom_addr[BANKE7]),
++		.ss_en      (ss_en),
++		.ss_si      (ss_mapper_UA),
++		.ss_so      (ss_mapper_E7)
+ 	);
+ 
+ 	mapper_F0 mapper_F0
+@@ -1248,7 +1313,10 @@
+ 		.ram_sel    (ram_sel[BANKF0]),
+ 		.ram_rw     (ram_rw[BANKF0]),
+ 		.ram_a      (ram_a[BANKF0]),
+-		.rom_a      (rom_addr[BANKF0])
++		.rom_a      (rom_addr[BANKF0]),
++		.ss_en      (ss_en),
++		.ss_si      (ss_mapper_E7),
++		.ss_so      (ss_mapper_F0)
+ 	);
+ 
+ 	mapper_32 mapper_32
+@@ -1266,7 +1334,10 @@
+ 		.ram_rw     (ram_rw[BANK32]),
+ 		.ram_a      (ram_a[BANK32]),
+ 		.rom_a      (rom_addr[BANK32]),
+-		.cold_reset (mapper != BANK32 || load_start)
++		.cold_reset (mapper != BANK32 || load_start),
++		.ss_en      (ss_en),
++		.ss_si      (ss_mapper_F0),
++		.ss_so      (ss_mapper_32)
+ 	);
+ 
+ 	mapper_AR mapper_AR
+@@ -1290,7 +1361,10 @@
+ 		.rom_size   (rom_size[18:0]),
+ 		.audio_data (tape_audio),
+ 		.tape_in    (tape_in),
+-		.fix_sc_cs  (fix_sc_cs)
++		.fix_sc_cs  (fix_sc_cs),
++		.ss_en      (ss_en),
++		.ss_si      (ss_mapper_32),
++		.ss_so      (ss_mapper_AR)
+ 	);
+ 
+ 	mapper_WD mapper_WD
+@@ -1309,7 +1383,10 @@
+ 		.ram_a      (ram_a[BANKWD]),
+ 		.rom_a      (rom_addr[BANKWD]),
+ 		// An 8195-byte dump carries banks 2 and 3 swapped; detect2600 flags it.
+-		.swapped    (mapper_revision[0])
++		.swapped    (mapper_revision[0]),
++		.ss_en      (ss_en),
++		.ss_si      (ss_mapper_AR),
++		.ss_so      (ss_mapper_WD)
+ 	);
+ 
+ 	mapper_3E mapper_3E
+@@ -1327,7 +1404,10 @@
+ 		.ram_rw     (ram_rw[BANK3E]),
+ 		.ram_a      (ram_a[BANK3E]),
+ 		.rom_a      (rom_addr[BANK3E]),
+-		.rom_size   (rom_size[18:0])
++		.rom_size   (rom_size[18:0]),
++		.ss_en      (ss_en),
++		.ss_si      (ss_mapper_WD),
++		.ss_so      (ss_mapper_3E)
+ 	);
+ 
+ 	mapper_SB mapper_SB
+@@ -1344,7 +1424,10 @@
+ 		.ram_sel    (ram_sel[BANKSB]),
+ 		.ram_rw     (ram_rw[BANKSB]),
+ 		.ram_a      (ram_a[BANKSB]),
+-		.rom_a      (rom_addr[BANKSB])
++		.rom_a      (rom_addr[BANKSB]),
++		.ss_en      (ss_en),
++		.ss_si      (ss_mapper_3E),
++		.ss_so      (ss_mapper_SB)
+ 	);
+ 
+ 	mapper_EF mapper_EF
+@@ -1361,7 +1444,10 @@
+ 		.ram_sel    (ram_sel[BANKEF]),
+ 		.ram_rw     (ram_rw[BANKEF]),
+ 		.ram_a      (ram_a[BANKEF]),
+-		.rom_a      (rom_addr[BANKEF])
++		.rom_a      (rom_addr[BANKEF]),
++		.ss_en      (ss_en),
++		.ss_si      (ss_mapper_SB),
++		.ss_so      (ss_mapper_EF)
+ 	);
+ 
+ 	mapper_0840 mapper_0840
+@@ -1378,7 +1464,10 @@
+ 		.ram_sel    (ram_sel[BANK0840]),
+ 		.ram_rw     (ram_rw[BANK0840]),
+ 		.ram_a      (ram_a[BANK0840]),
+-		.rom_a      (rom_addr[BANK0840])
++		.rom_a      (rom_addr[BANK0840]),
++		.ss_en      (ss_en),
++		.ss_si      (ss_mapper_EF),
++		.ss_so      (ss_mapper_0840)
+ 	);
+ 
+ 	mapper_FC mapper_FC
+@@ -1396,7 +1485,10 @@
+ 		.ram_rw     (ram_rw[BANKFC]),
+ 		.ram_a      (ram_a[BANKFC]),
+ 		.rom_a      (rom_addr[BANKFC]),
+-		.rom_size   (rom_size)
++		.rom_size   (rom_size),
++		.ss_en      (ss_en),
++		.ss_si      (ss_mapper_0840),
++		.ss_so      (ss_mapper_FC)
+ 	);
+ 
+ 	mapper_DF mapper_DF
+@@ -1414,7 +1506,10 @@
+ 		.ram_rw     (ram_rw[BANKDF]),
+ 		.ram_a      (ram_a[BANKDF]),
+ 		.rom_a      (rom_addr[BANKDF]),
+-		.big        (rom_size[18])
++		.big        (rom_size[18]),
++		.ss_en      (ss_en),
++		.ss_si      (ss_mapper_FC),
++		.ss_so      (ss_mapper_DF)
+ 	);
+ 
+ 	mapper_MC #(.SLICE(0)) mapper_MC_MC2K
+@@ -1433,7 +1528,10 @@
+ 		.ram_a      (ram_a[BANKMC2K]),
+ 		.rom_a      (rom_addr[BANKMC2K]),
+ 		.load_start (load_start),
+-		.rom_size   (rom_size)
++		.rom_size   (rom_size),
++		.ss_en      (ss_en),
++		.ss_si      (ss_mapper_DF),
++		.ss_so      (ss_mapper_MC_MC2K)
+ 	);
+ 
+ 	mapper_MC #(.SLICE(1)) mapper_MC_MC4K
+@@ -1452,7 +1550,10 @@
+ 		.ram_a      (ram_a[BANKMC4K]),
+ 		.rom_a      (rom_addr[BANKMC4K]),
+ 		.load_start (load_start),
+-		.rom_size   (rom_size)
++		.rom_size   (rom_size),
++		.ss_en      (ss_en),
++		.ss_si      (ss_mapper_MC_MC2K),
++		.ss_so      (ss_mapper_MC_MC4K)
+ 	);
+ 
+ 	mapper_MC #(.SLICE(2)) mapper_MC_MC8K
+@@ -1471,7 +1572,10 @@
+ 		.ram_a      (ram_a[BANKMC8K]),
+ 		.rom_a      (rom_addr[BANKMC8K]),
+ 		.load_start (load_start),
+-		.rom_size   (rom_size)
++		.rom_size   (rom_size),
++		.ss_en      (ss_en),
++		.ss_si      (ss_mapper_MC_MC4K),
++		.ss_so      (ss_mapper_MC_MC8K)
+ 	);
+ 
+ 	mapper_JANE mapper_JANE
+@@ -1488,7 +1592,10 @@
+ 		.ram_sel    (ram_sel[BANKJANE]),
+ 		.ram_rw     (ram_rw[BANKJANE]),
+ 		.ram_a      (ram_a[BANKJANE]),
+-		.rom_a      (rom_addr[BANKJANE])
++		.rom_a      (rom_addr[BANKJANE]),
++		.ss_en      (ss_en),
++		.ss_si      (ss_mapper_MC_MC8K),
++		.ss_so      (ss_mapper_JANE)
+ 	);
+ 
+ endmodule
+--- a/rtl/mapper_fa2.sv
++++ b/rtl/mapper_fa2.sv
+@@ -27,7 +27,19 @@
+ 	output logic  [7:0] nvram_wdata,
+ 	input  logic  [7:0] nvram_rdata,
+ 	input  logic        nvram_ready,
+-	output logic        nvram_dirty
++	output logic        nvram_dirty,
++
++	// Save states. While ss_hold the work RAM belongs to ss_mem_* (q one
++	// clock after the address); while ss_en every register shifts one place
++	// along the chain, ss_si in, ss_so out.
++	input  logic        ss_hold,
++	input  logic        ss_en,
++	input  logic        ss_si,
++	output logic        ss_so,
++	input  logic  [7:0] ss_mem_addr,
++	input  logic        ss_mem_we,
++	input  logic  [7:0] ss_mem_wdata,
++	output logic  [7:0] ss_mem_q
+ );
+ 	localparam logic [2:0] COPY_NONE      = 3'd0;
+ 	localparam logic [2:0] COPY_LOAD_REQ  = 3'd1;
+@@ -76,6 +88,12 @@
+ 			ram_wdata = 8'h00;
+ 			ram_wren = 1'b1;
+ 		end
++
++		if (ss_hold) begin
++			ram_addr = ss_mem_addr;
++			ram_wdata = ss_mem_wdata;
++			ram_wren = ss_mem_we;
++		end
+ 	end
+ 
+ 	spram #(
+@@ -90,6 +108,7 @@
+ 		.q       (ram_q),
+ 		.cs      (1'b1)
+ 	);
++	assign ss_mem_q = ram_q;
+ 
+ 	always_comb begin
+ 		nvram_request = copy_state == COPY_LOAD_REQ ||
+@@ -216,5 +235,10 @@
+ 			ready_response <= 1'b0;
+ 			nvram_dirty <= 1'b0;
+ 		end
++
++		if (ss_en) {ss_so, nvram_dirty, timer, ready_response, command_pending, operation_active,
++			copy_addr, copy_state, bank} <=
++			{nvram_dirty, timer, ready_response, command_pending, operation_active,
++			copy_addr, copy_state, bank, ss_si};
+ 	end
+ endmodule
+--- a/rtl/paddles.sv
++++ b/rtl/paddles.sv
+@@ -181,7 +181,11 @@
+ 	input clear,
+ 	input read,
+ 	output logic charged,
+-	output logic [33:0] difference
++	output logic [33:0] difference,
++	// Save-state chain: while ss_en, every register shifts one place.
++	input ss_en,
++	input ss_si,
++	output logic ss_so
+ );
+ 
+ // Note that this is in nanoseconds times 100.
+@@ -197,7 +201,12 @@
+ logic [32:0] width = 0;
+ logic cleared = 0;
+ 
+-always @(posedge clk) if (ce) begin
++always @(posedge clk) begin
++	if (ss_en) {ss_so, old_read, read_count, clear_count, cleared, high_count, charged,
++		highest, lowest, width, difference} <=
++		{old_read, read_count, clear_count, cleared, high_count, charged,
++		highest, lowest, width, difference, ss_si};
++	else if (ce) begin
+ 	old_read <= clear;
+ 	if (~read_measured && (clear && ~old_read))
+ 		read_count <= read_count + 1'd1;
+@@ -240,6 +249,7 @@
+ 		highest <= '0;
+ 		difference <= '0;
+ 	end
++	end
+ end
+ 
+ // assign paddle_timing = '{
+--- a/rtl/RIOT/M6532.sv
++++ b/rtl/RIOT/M6532.sv
+@@ -42,7 +42,19 @@
+ 	input  [7:0] PB_in,     // if not altered by a peripheral, in order for
+ 	output [7:0] PB_out,    // the chip to read properly!
+ 	output [7:0] oe,        // Which of D7:D0 the chip is actually driving
+-	output       PA_read    // A selected read of ORA is happening now
++	output       PA_read,   // A selected read of ORA is happening now
++
++	// Save states. While ss_hold the CPU cannot write the RAM and its second
++	// port belongs to ss_mem_* (q one clock after the address); while ss_en
++	// every register shifts one place along the chain, ss_si in, ss_so out.
++	input        ss_hold,
++	input        ss_en,
++	input        ss_si,
++	output reg   ss_so,
++	input  [6:0] ss_mem_addr,
++	input        ss_mem_we,
++	input  [7:0] ss_mem_wdata,
++	output [7:0] ss_mem_q
+ );
+ 
+ reg [7:0] out_a, out_b, data;
+@@ -65,6 +77,7 @@
+ wire [7:0] ram_q;
+ reg  [7:0] d_out_reg;
+ reg        ram_read_r;
++reg        ss_c1;  // save-state chain link between the two register blocks
+ 
+ // The 7800 BIOS leaves this loader in RIOT RAM before it starts a cart, so
+ // bypassing the BIOS has to put it there. Byte 8 and the last two bytes are
+@@ -84,7 +97,7 @@
+ // is a wrapper instance. Port A is the CPU side and port B the power up walk;
+ // they never write together because the console drives ram_init from its
+ // reset, which is the same signal that holds res_n low.
+-wire       ram_cpu_wr = res_n && ce && (CS1 & ~CS2_n) && ~RS_n && ~RW_n;
++wire       ram_cpu_wr = res_n && ce && (CS1 & ~CS2_n) && ~RS_n && ~RW_n && ~ss_hold;
+ wire [7:0] ram_init_d = ram_init_7800 ? init_image[init_addr] : 8'h00;
+ 
+ cache_ram_dp #(.ADDR_WIDTH(7), .DATA_WIDTH(8)) riot_ram
+@@ -94,10 +107,10 @@
+ 	.wren_a_i  (ram_cpu_wr),
+ 	.wdata_a_i (d_in),
+ 	.q_a_o     (ram_q),
+-	.addr_b_i  (init_addr),
+-	.wren_b_i  (ram_init),
+-	.wdata_b_i (ram_init_d),
+-	.q_b_o     ()
++	.addr_b_i  (ss_hold ? ss_mem_addr : init_addr),
++	.wren_b_i  (ss_hold ? ss_mem_we : ram_init),
++	.wdata_b_i (ss_hold ? ss_mem_wdata : ram_init_d),
++	.q_b_o     (ss_mem_q)
+ );
+ 
+ // IRQ is open drain on the part: it pulls the line low and otherwise releases
+@@ -173,6 +186,7 @@
+ 		d_out_reg <= 8'hFF;
+ 		ram_read_r <= 1'b0;
+ 	end
++	if (ss_en) {ss_c1, ram_read_r, d_out_reg} <= {ram_read_r, d_out_reg, ss_si};
+ end
+ 
+ always_ff @(posedge clk) begin
+@@ -250,6 +264,11 @@
+ 		if (pa7_edge)
+ 			interrupt[6] <= 1;
+ 	end
++
++	if (ss_en) {ss_so, init_addr, out_a, out_b, dir_a, dir_b, interrupt, irq_en,
++		edge_detect, old_pa7, incr, timer, prescaler, rollover} <=
++		{init_addr, out_a, out_b, dir_a, dir_b, interrupt, irq_en,
++		edge_detect, old_pa7, incr, timer, prescaler, rollover, ss_c1};
+ end
+ 
+ endmodule
+--- a/rtl/TIA.sv
++++ b/rtl/TIA.sv
+@@ -114,7 +114,10 @@
+ 	input phi2,
+ 	input reset,
+ 	input sys_reset,
+-	output logic [5:0] lfsr
++	output logic [5:0] lfsr,
++	input ss_en,
++	input ss_si,
++	output logic ss_so
+ );
+ 	reg [5:0] lfsr_latch1, lfsr_next;
+ 
+@@ -131,6 +134,8 @@
+ 		if (reset || sys_reset) begin
+ 			lfsr_latch1 <= 0;
+ 		end
++
++		if (ss_en) {ss_so, lfsr_latch1, lfsr_next} <= {lfsr_latch1, lfsr_next, ss_si};
+ 	end
+ 
+ endmodule
+@@ -170,7 +175,10 @@
+ 	input r,
+ 	input s,
+ 	output logic q,
+-	output logic q_n
++	output logic q_n,
++	input  ss_en,
++	input  ss_si,
++	output logic ss_so
+ );
+ 
+ 	wire i_val = r ? 1'd0 : (s ? 1'd1 : sr_val);
+@@ -182,6 +190,7 @@
+ 		sr_val <= i_val;
+ 		if (reset)
+ 			sr_val <= 1'd0;
++		if (ss_en) {ss_so, sr_val} <= {sr_val, ss_si};
+ 	end
+ 
+ endmodule
+@@ -205,7 +214,10 @@
+ 	input  logic   r_n,
+ 	input  logic   s_n,
+ 	output logic   q_n,
+-	output logic   q
++	output logic   q,
++	input  logic   ss_en,
++	input  logic   ss_si,
++	output logic   ss_so
+ );
+ 	logic master, slave;
+ 
+@@ -222,6 +234,8 @@
+ 			master <= 1'd0;
+ 			slave  <= 1'd0;
+ 		end
++
++		if (ss_en) {ss_so, master, slave} <= {master, slave, ss_si};
+ 	end
+ 
+ endmodule
+@@ -234,8 +248,14 @@
+ 	input  logic   tick,
+ 	output clock_t clock,
+ 	output logic   f1_qn,
+-	output logic   f1_q_l
+-);
++	output logic   f1_q_l,
++	input  logic   ss_en,
++	input  logic   ss_si,
++	output logic   ss_so
++);
++	// Save-state chain through the cells below.
++	logic ss_f_left, ss_f_right, ss_q_1l;
++	assign ss_so = ss_q_1l;
+ 
+ 	logic q_left, q_left_n, q_right, q_right_n;
+ 	logic f1_q_l_l;
+@@ -255,7 +275,10 @@
+ 		.s_n        (q_right),
+ 		.r_n        (q_right_n),
+ 		.q          (q_left),
+-		.q_n        (q_left_n)
++		.q_n        (q_left_n),
++		.ss_en      (ss_en),
++		.ss_si      (ss_si),
++		.ss_so      (ss_f_left)
+ 	);
+ 
+ 	f_cell f_right
+@@ -266,7 +289,10 @@
+ 		.s_n        (q_left_n),
+ 		.r_n        (q_left),
+ 		.q          (q_right),
+-		.q_n        (q_right_n)
++		.q_n        (q_right_n),
++		.ss_en      (ss_en),
++		.ss_si      (ss_f_left),
++		.ss_so      (ss_f_right)
+ 	);
+ 
+ 	sr_latch q_1l
+@@ -276,7 +302,10 @@
+ 		.r          (~q_right_n),
+ 		.s          (reset),
+ 		.q          (f1_q_l),
+-		.q_n        ()
++		.q_n        (),
++		.ss_en      (ss_en),
++		.ss_si      (ss_f_right),
++		.ss_so      (ss_q_1l)
+ 	);
+ endmodule
+ 
+@@ -287,7 +316,10 @@
+ 	input  logic   phi1,
+ 	input  logic   phi2,
+ 	input  logic   in,
+-	output logic   out
++	output logic   out,
++	input  logic   ss_en,
++	input  logic   ss_si,
++	output logic   ss_so
+ );
+ 	logic out_next, out_latch;
+ 
+@@ -304,6 +336,8 @@
+ 			out_latch <= 0;
+ 			out_next <= 0;
+ 		end
++
++		if (ss_en) {ss_so, out_next, out_latch} <= {out_next, out_latch, ss_si};
+ 	end
+ endmodule
+ 
+@@ -313,7 +347,10 @@
+ 	input reset,
+ 	input set,
+ 	input in,
+-	output out
++	output out,
++	input ss_en,
++	input ss_si,
++	output logic ss_so
+ );
+ 
+ 	logic inv_latch = 0;
+@@ -326,6 +363,7 @@
+ 			inv_latch <= in;
+ 		if (reset)
+ 			inv_latch <= 0;
++		if (ss_en) {ss_so, inv_latch} <= {inv_latch, ss_si};
+ 	end
+ endmodule
+ 
+@@ -340,7 +378,10 @@
+ 	output clock_t clock,
+ 	output logic   f1_qn,
+ 	output logic   f1_qn_edge,
+-	output logic   f1_q_l
++	output logic   f1_q_l,
++	input  logic   ss_en,
++	input  logic   ss_si,
++	output logic   ss_so
+ );
+ 
+ // This component re-occurs throughout the design multiple times and contains two
+@@ -395,6 +436,7 @@
+ 	if (~f1_qn)
+ 		f1_qn_reg <= 0;
+ 
++	if (ss_en) {ss_so, f_count, old_tick, old_reset, f1_qn_reg} <= {f_count, old_tick, old_reset, f1_qn_reg, ss_si};
+ end
+ 
+ endmodule
+@@ -478,8 +520,13 @@
+ 	// there is no path from pext_* to here - which is what breaks the
+ 	// pext -> pclk -> phase controller -> pext ring. See the TIA phi*_gen pins.
+ 	output logic   pclk_gen_edge_p1,
+-	output logic   pclk_gen_edge_p2
++	output logic   pclk_gen_edge_p2,
++	input  logic   ss_en,
++	input  logic   ss_si,
++	output logic   ss_so
+ );
++	// Save-state chain through the cells below.
++	logic ss_hclk_counter;
+ 
+ parameter PHI2_EXT = 0;
+ // Fantastic Clocks and Where To Find Them
+@@ -522,7 +569,10 @@
+ 	.clock      (hclk),
+ 	.f1_qn      (),
+ 	.f1_qn_edge (),
+-	.f1_q_l     (rsynl)
++	.f1_q_l     (rsynl),
++	.ss_en      (ss_en),
++	.ss_si      (ss_si),
++	.ss_so      (ss_hclk_counter)
+ );
+ 
+ wire resp0 = (hclk.level_p2 && rsynd) || reset;
+@@ -572,6 +622,8 @@
+ 		oclk_clock <= '0;
+ 		pclk_clock <= 0;
+ 	end
++
++	if (ss_en) {ss_so, oclk_tog, oclk_clock, pclk_div, pclk_clock} <= {oclk_tog, oclk_clock, pclk_div, pclk_clock, ss_hclk_counter};
+ end
+ 
+ endmodule
+@@ -594,8 +646,13 @@
+ 	output logic aud1,
+ 	output logic shb,
+ 	output logic rhb,
+-	output logic rsynd
++	output logic rsynd,
++	input  logic ss_en,
++	input  logic ss_si,
++	output logic ss_so
+ );
++	// Save-state chain through the cells below.
++	logic ss_timing_lfsr, ss_sec_l, ss_rsynd_ir, ss_shb_ir, ss_aud1_d, ss_aud2_d, ss_rhs_db, ss_hsync_dl, ss_hblank_dl, ss_hgap_dl, ss_cb_dl, ss_cnt_d;
+ 
+ 	logic [5:0] lfsr;
+ 	logic sec_latch, sec_latch_n;
+@@ -616,7 +673,10 @@
+ 		.phi2      (hclk.level_p2),
+ 		.reset     (shb || rst),
+ 		.sys_reset (rst),
+-		.lfsr      (lfsr)
++		.lfsr      (lfsr),
++		.ss_en     (ss_en),
++		.ss_si     (ss_si),
++		.ss_so     (ss_timing_lfsr)
+ 	);
+ 
+ 	always_comb begin
+@@ -641,11 +701,14 @@
+ 		.r      (sec),
+ 		.s      (shb),
+ 		.q      (sec_latch),
+-		.q_n    (sec_latch_n)
++		.q_n    (sec_latch_n),
++		.ss_en  (ss_en),
++		.ss_si  (ss_timing_lfsr),
++		.ss_so  (ss_sec_l)
+ 	);
+ 
+-	inverter_reg rsynd_ir(clk, rst, hclk.level_p1, eer, rsynd);
+-	inverter_reg shb_ir(clk, rst, hclk.level_p2, rsynd, shb);
++	inverter_reg rsynd_ir(clk, rst, hclk.level_p1, eer, rsynd, ss_en, ss_sec_l, ss_rsynd_ir);
++	inverter_reg shb_ir(clk, rst, hclk.level_p2, rsynd, shb, ss_en, ss_rsynd_ir, ss_shb_ir);
+ 
+ 	d_cell aud1_d
+ 	(
+@@ -654,7 +717,10 @@
+ 		.phi1       (hclk.level_p1),
+ 		.phi2       (hclk.level_p2),
+ 		.in         (shb || lrhb),
+-		.out        (aud1_l)
++		.out        (aud1_l),
++		.ss_en      (ss_en),
++		.ss_si      (ss_shb_ir),
++		.ss_so      (ss_aud1_d)
+ 	);
+ 
+ 	d_cell aud2_d
+@@ -664,7 +730,10 @@
+ 		.phi1       (hclk.level_p1),
+ 		.phi2       (hclk.level_p2),
+ 		.in         (rhs || cnt),
+-		.out        (aud2_l)
++		.out        (aud2_l),
++		.ss_en      (ss_en),
++		.ss_si      (ss_aud1_d),
++		.ss_so      (ss_aud2_d)
+ 	);
+ 
+ 	d_cell rhs_db
+@@ -674,7 +743,10 @@
+ 		.phi1       (hclk.level_p1),
+ 		.phi2       (hclk.level_p2),
+ 		.in         (rhs),
+-		.out        (rhs_d)
++		.out        (rhs_d),
++		.ss_en      (ss_en),
++		.ss_si      (ss_aud2_d),
++		.ss_so      (ss_rhs_db)
+ 	);
+ 
+ 	d_cell hsync_dl
+@@ -684,7 +756,10 @@
+ 		.phi1       (hclk.level_p1),
+ 		.phi2       (hclk.level_p2),
+ 		.in         (hsync || shs),
+-		.out        (hsync)
++		.out        (hsync),
++		.ss_en      (ss_en),
++		.ss_si      (ss_rhs_db),
++		.ss_so      (ss_hsync_dl)
+ 	);
+ 
+ 	wire hb_1a = sec_latch && rhb;
+@@ -697,7 +772,10 @@
+ 		.phi1       (hclk.level_p1),
+ 		.phi2       (hclk.level_p2),
+ 		.in         (hblank_n || hb_1a || hb_1b),
+-		.out        (hblank_n)
++		.out        (hblank_n),
++		.ss_en      (ss_en),
++		.ss_si      (ss_hsync_dl),
++		.ss_so      (ss_hblank_dl)
+ 	);
+ 
+ 	assign hblank = ~hblank_n;
+@@ -709,7 +787,10 @@
+ 		.phi1       (hclk.level_p1),
+ 		.phi2       (hclk.level_p2),
+ 		.in         (hgap_n || rhb),
+-		.out        (hgap_n)
++		.out        (hgap_n),
++		.ss_en      (ss_en),
++		.ss_si      (ss_hblank_dl),
++		.ss_so      (ss_hgap_dl)
+ 	);
+ 
+ 	assign hgap = ~hgap_n;
+@@ -721,7 +802,10 @@
+ 		.phi1       (hclk.level_p1),
+ 		.phi2       (hclk.level_p2),
+ 		.in         (CB || rcb),
+-		.out        (CB)
++		.out        (CB),
++		.ss_en      (ss_en),
++		.ss_si      (ss_hgap_dl),
++		.ss_so      (ss_cb_dl)
+ 	);
+ 
+ 	d_cell cnt_d
+@@ -731,8 +815,12 @@
+ 		.phi1       (hclk.level_p1),
+ 		.phi2       (hclk.level_p2),
+ 		.in         (cnt),
+-		.out        (cntd)
++		.out        (cntd),
++		.ss_en      (ss_en),
++		.ss_si      (ss_cb_dl),
++		.ss_so      (ss_cnt_d)
+ 	);
++	assign ss_so = ss_cnt_d;
+ 
+ endmodule
+ 
+@@ -756,8 +844,13 @@
+ 	output logic       p1_mclk,
+ 	output logic       m0_mclk,
+ 	output logic       m1_mclk,
+-	output logic       bl_mclk
++	output logic       bl_mclk,
++	input  logic       ss_en,
++	input  logic       ss_si,
++	output logic       ss_so
+ );
++	// Save-state chain through the cells below.
++	logic ss_hmove_l, ss_s0_ir, ss_sec_ir, ss_sec1_ir;
+ 	logic [1:0] p0ec, p1ec, m0ec, m1ec, blec;
+ 	logic [3:0] hmove_cnt;
+ 	logic sec_1, sec_0;
+@@ -778,12 +871,15 @@
+ 		.r      (sec_1),
+ 		.s      (hmove),
+ 		.q      (hmove_latch),
+-		.q_n    ()
++		.q_n    (),
++		.ss_en  (ss_en),
++		.ss_si  (ss_si),
++		.ss_so  (ss_hmove_l)
+ 	);
+ 
+-	inverter_reg s0_ir(clk, reset, hclk.level_p1, hmove_latch, sec_0);
+-	inverter_reg sec_ir(clk, reset, hclk.level_p2, sec_0, sec);
+-	inverter_reg sec1_ir(clk, reset, hclk.level_p1, sec, sec_1);
++	inverter_reg s0_ir(clk, reset, hclk.level_p1, hmove_latch, sec_0, ss_en, ss_hmove_l, ss_s0_ir);
++	inverter_reg sec_ir(clk, reset, hclk.level_p2, sec_0, sec, ss_en, ss_s0_ir, ss_sec_ir);
++	inverter_reg sec1_ir(clk, reset, hclk.level_p1, sec, sec_1, ss_en, ss_sec_ir, ss_sec1_ir);
+ 
+ 	always @(posedge clk) begin : hmove_block
+ 		if (hclk.edge_p2) begin
+@@ -812,6 +908,8 @@
+ 			{p0ec, p1ec, m0ec, m1ec, blec} <= 10'd0;
+ 			hmove_cnt <= 0;
+ 		end
++
++		if (ss_en) {ss_so, hmove_cnt, p0ec, p1ec, m0ec, m1ec, blec} <= {hmove_cnt, p0ec, p1ec, m0ec, m1ec, blec, ss_sec1_ir};
+ 	end
+ 
+ endmodule
+@@ -829,8 +927,13 @@
+ 	input         cnt,     // center signal, high means right half
+ 	input         rhb,     // Reset HBlank signal
+ 	input [19:0]  pfc,     // Combined playfield registers
+-	output logic  pf       // Playfield graphics
++	output logic  pf,      // Playfield graphics
++	input         ss_en,   // Save-state chain
++	input         ss_si,
++	output logic  ss_so
+ );
++	// Save-state chain through the cells below.
++	logic ss_pf_out, ss_dir_l, ss_pf1_ir, ss_pf2_ir;
+ 
+ 	logic [4:0] pf_index, pf_next, pf_latch2, pf_latch1;
+ 	logic pf_1, pf_2, pf_3;
+@@ -875,7 +978,10 @@
+ 		.s_n        (~pf_3),
+ 		.r_n        (pf_3),
+ 		.q          (pf),
+-		.q_n        ()
++		.q_n        (),
++		.ss_en      (ss_en),
++		.ss_si      (ss_si),
++		.ss_so      (ss_pf_out)
+ 	);
+ 
+ 	sr_latch dir_l
+@@ -885,11 +991,14 @@
+ 		.r          (pf_reset),
+ 		.s          (pf_reflect),
+ 		.q          (dir),
+-		.q_n        ()
++		.q_n        (),
++		.ss_en      (ss_en),
++		.ss_si      (ss_pf_out),
++		.ss_so      (ss_dir_l)
+ 	);
+ 
+-	inverter_reg pf1_ir(clk, reset, hclk.level_p1, pf_1, pf_2);
+-	inverter_reg pf2_ir(clk, reset, hclk.level_p2, pf_2, pf_3);
++	inverter_reg pf1_ir(clk, reset, hclk.level_p1, pf_1, pf_2, ss_en, ss_dir_l, ss_pf1_ir);
++	inverter_reg pf2_ir(clk, reset, hclk.level_p2, pf_2, pf_3, ss_en, ss_pf1_ir, ss_pf2_ir);
+ 
+ 	always @(posedge clk) begin : pf_block
+ 		if (hclk.level_p1) begin
+@@ -899,6 +1008,8 @@
+ 		if (hclk.level_p2) begin
+ 			pf_latch2 <= pf_latch1;
+ 		end
++
++		if (ss_en) {ss_so, pf_latch1, pf_latch2} <= {pf_latch1, pf_latch2, ss_pf2_ir};
+ 	end
+ 
+ endmodule
+@@ -910,7 +1021,10 @@
+ 	input reset,
+ 	input motck,
+ 	input ec,
+-	output tick
++	output tick,
++	input ss_en,
++	input ss_si,
++	output logic ss_so
+ );
+ 	// The reason for signal this centers around an analog delay of around 21ns which causes an
+ 	// extra clock edge to form if the hmove counter is glitched into remaining on during non-hblank
+@@ -927,6 +1041,7 @@
+ 			old_motck <= 0;
+ 			old_ec <= 0;
+ 		end
++		if (ss_en) {ss_so, old_motck, old_ec} <= {old_motck, old_ec, ss_si};
+ 	end
+ 
+ endmodule
+@@ -945,8 +1060,13 @@
+ 	input       blen_o,      // Ball enable register (last)
+ 	input       blvd,        // Ball vdel
+ 	input [1:0] blsiz,       // Ball size register
+-	output      bl           // Ball graphics output
++	output      bl,          // Ball graphics output
++	input       ss_en,       // Save-state chain
++	input       ss_si,
++	output      ss_so
+ );
++	// Save-state chain through the cells below.
++	logic ss_bl_tick, ss_object_counter, ss_object_lfsr, ss_ball_out, ss_obj_1, ss_obj_2;
+ 	clock_t objclk;
+ 
+ 	logic [1:0] d1l_1, d1l_2;
+@@ -963,7 +1083,10 @@
+ 		.reset      (reset),
+ 		.motck      (motck),
+ 		.ec         (blec),
+-		.tick       (object_tick)
++		.tick       (object_tick),
++		.ss_en      (ss_en),
++		.ss_si      (ss_si),
++		.ss_so      (ss_bl_tick)
+ 	);
+ 
+ 	f_counter_ll object_counter
+@@ -974,7 +1097,10 @@
+ 		.tick       (object_tick),
+ 		.clock      (objclk),
+ 		.f1_qn      (fc1_qn),
+-		.f1_q_l     (q_or_res)
++		.f1_q_l     (q_or_res),
++		.ss_en      (ss_en),
++		.ss_si      (ss_bl_tick),
++		.ss_so      (ss_object_counter)
+ 	);
+ 
+ 	lfsr_6 object_lfsr
+@@ -984,7 +1110,10 @@
+ 		.phi2      (objclk.level_p2),
+ 		.reset     (~d1l_1[1]),
+ 		.sys_reset (reset),
+-		.lfsr      (lfsr)
++		.lfsr      (lfsr),
++		.ss_en     (ss_en),
++		.ss_si     (ss_object_counter),
++		.ss_so     (ss_object_lfsr)
+ 	);
+ 
+ 	wire gr1  = ~((~blvd && blen) || (blvd && blen_o));
+@@ -1002,7 +1131,10 @@
+ 		.s_n        (gr5),
+ 		.r_n        (~gr5),
+ 		.q          (bl),
+-		.q_n        ()
++		.q_n        (),
++		.ss_en      (ss_en),
++		.ss_si      (ss_object_lfsr),
++		.ss_so      (ss_ball_out)
+ 	);
+ 
+ 	d_cell obj_1
+@@ -1012,7 +1144,10 @@
+ 		.phi1       (objclk.level_p1),
+ 		.phi2       (objclk.level_p2),
+ 		.in         (~object_reset),
+-		.out        (d1l_1[1])
++		.out        (d1l_1[1]),
++		.ss_en      (ss_en),
++		.ss_si      (ss_ball_out),
++		.ss_so      (ss_obj_1)
+ 	);
+ 
+ 	d_cell obj_2
+@@ -1022,8 +1157,12 @@
+ 		.phi1       (objclk.level_p1),
+ 		.phi2       (objclk.level_p2),
+ 		.in         (d1l_1[1]),
+-		.out        (d1l_2[1])
++		.out        (d1l_2[1]),
++		.ss_en      (ss_en),
++		.ss_si      (ss_obj_1),
++		.ss_so      (ss_obj_2)
+ 	);
++	assign ss_so = ss_obj_2;
+ 
+ endmodule
+ 
+@@ -1038,8 +1177,13 @@
+ 	input       mre,        // Missile reset signal
+ 	input       men,        // Missile enable register
+ 	input [5:0] nusiz,      // Player/missile size
+-	output      m           // Missile graphics output
++	output      m,          // Missile graphics output
++	input       ss_en,      // Save-state chain
++	input       ss_si,
++	output      ss_so
+ );
++	// Save-state chain through the cells below.
++	logic ss_m_tick, ss_object_counter, ss_object_lfsr, ss_mis_out, ss_obj_1, ss_obj_2, ss_obj_3;
+ 
+ 	clock_t objclk;
+ 
+@@ -1064,7 +1208,10 @@
+ 		.reset      (reset),
+ 		.motck      (motck),
+ 		.ec         (mec),
+-		.tick       (object_tick)
++		.tick       (object_tick),
++		.ss_en      (ss_en),
++		.ss_si      (ss_si),
++		.ss_so      (ss_m_tick)
+ 	);
+ 
+ 	f_counter_ll object_counter
+@@ -1075,7 +1222,10 @@
+ 		.tick       (object_tick),
+ 		.clock      (objclk),
+ 		.f1_qn      (fc1_qn),
+-		.f1_q_l     (q_or_res)
++		.f1_q_l     (q_or_res),
++		.ss_en      (ss_en),
++		.ss_si      (ss_m_tick),
++		.ss_so      (ss_object_counter)
+ 	);
+ 
+ 	lfsr_6 object_lfsr
+@@ -1085,7 +1235,10 @@
+ 		.phi2      (objclk.level_p2),
+ 		.reset     (or_d),
+ 		.sys_reset (reset),
+-		.lfsr      (lfsr)
++		.lfsr      (lfsr),
++		.ss_en     (ss_en),
++		.ss_si     (ss_object_counter),
++		.ss_so     (ss_object_lfsr)
+ 	);
+ 
+ 	wire mg1  = ~(fc1_qn || m_size_n[0]);
+@@ -1102,7 +1255,10 @@
+ 		.s_n        (mg4),
+ 		.r_n        (~mg4),
+ 		.q          (m),
+-		.q_n        ()
++		.q_n        (),
++		.ss_en      (ss_en),
++		.ss_si      (ss_object_lfsr),
++		.ss_so      (ss_mis_out)
+ 	);
+ 
+ 	d_cell obj_1
+@@ -1112,7 +1268,10 @@
+ 		.phi1       (objclk.level_p1),
+ 		.phi2       (objclk.level_p2),
+ 		.in         (object_reset),
+-		.out        (or_d)
++		.out        (or_d),
++		.ss_en      (ss_en),
++		.ss_si      (ss_mis_out),
++		.ss_so      (ss_obj_1)
+ 	);
+ 
+ 	d_cell obj_2
+@@ -1122,7 +1281,10 @@
+ 		.phi1       (objclk.level_p1),
+ 		.phi2       (objclk.level_p2),
+ 		.in         (~object_draw),
+-		.out        (d1l_1[1])
++		.out        (d1l_1[1]),
++		.ss_en      (ss_en),
++		.ss_si      (ss_obj_1),
++		.ss_so      (ss_obj_2)
+ 	);
+ 
+ 	d_cell obj_3
+@@ -1132,8 +1294,12 @@
+ 		.phi1       (objclk.level_p1),
+ 		.phi2       (objclk.level_p2),
+ 		.in         (d1l_1[1]),
+-		.out        (d1l_2[1])
++		.out        (d1l_2[1]),
++		.ss_en      (ss_en),
++		.ss_si      (ss_obj_2),
++		.ss_so      (ss_obj_3)
+ 	);
++	assign ss_so = ss_obj_3;
+ 
+ endmodule
+ 
+@@ -1153,8 +1319,13 @@
+ 	input [7:0] grpnew,     // Player graphic (new)
+ 	input [7:0] grpold,     // Player graphic (delayed)
+ 	output      msrst,      // Missile to player reset signal
+-	output      p           // Player graphics output
++	output      p,          // Player graphics output
++	input       ss_en,      // Save-state chain
++	input       ss_si,
++	output      ss_so
+ );
++	// Save-state chain through the cells below.
++	logic ss_p_tick, ss_object_counter, ss_object_lfsr, ss_pl_out, ss_obj_reset, ss_obj_start, ss_obj_fstob, ss_f_ena, ss_f_go, ss_f_psc1, ss_f_psc2, ss_f_psc3;
+ 	clock_t objclk;
+ 
+ 	logic [1:0] d1l_1, d1l_2;
+@@ -1197,7 +1368,10 @@
+ 		.reset      (reset),
+ 		.motck      (motck),
+ 		.ec         (pec),
+-		.tick       (object_tick)
++		.tick       (object_tick),
++		.ss_en      (ss_en),
++		.ss_si      (ss_si),
++		.ss_so      (ss_p_tick)
+ 	);
+ 
+ 	f_counter_ll object_counter
+@@ -1208,7 +1382,10 @@
+ 		.tick       (object_tick),
+ 		.clock      (objclk),
+ 		.f1_qn      (fc1_qn),
+-		.f1_q_l     (q_or_res)
++		.f1_q_l     (q_or_res),
++		.ss_en      (ss_en),
++		.ss_si      (ss_p_tick),
++		.ss_so      (ss_object_counter)
+ 	);
+ 
+ 	lfsr_6 object_lfsr
+@@ -1218,7 +1395,10 @@
+ 		.phi2      (objclk.level_p2),
+ 		.reset     (or_d),
+ 		.sys_reset (reset),
+-		.lfsr      (lfsr)
++		.lfsr      (lfsr),
++		.ss_en     (ss_en),
++		.ss_si     (ss_object_counter),
++		.ss_so     (ss_object_lfsr)
+ 	);
+ 
+ 	wire pl_1a = ~(go_n || ~oldgrp || ~pvdel);
+@@ -1233,7 +1413,10 @@
+ 		.s_n        (pl_2),
+ 		.r_n        (~pl_2),
+ 		.q          (p),
+-		.q_n        ()
++		.q_n        (),
++		.ss_en      (ss_en),
++		.ss_si      (ss_object_lfsr),
++		.ss_so      (ss_pl_out)
+ 	);
+ 
+ 	d_cell obj_reset
+@@ -1243,7 +1426,10 @@
+ 		.phi1       (objclk.level_p1),
+ 		.phi2       (objclk.level_p2),
+ 		.in         (object_reset),
+-		.out        (or_d)
++		.out        (or_d),
++		.ss_en      (ss_en),
++		.ss_si      (ss_pl_out),
++		.ss_so      (ss_obj_reset)
+ 	);
+ 
+ 	d_cell obj_start
+@@ -1253,7 +1439,10 @@
+ 		.phi1       (objclk.level_p1),
+ 		.phi2       (objclk.level_p2),
+ 		.in         (~object_draw),
+-		.out        (start_n)
++		.out        (start_n),
++		.ss_en      (ss_en),
++		.ss_si      (ss_obj_reset),
++		.ss_so      (ss_obj_start)
+ 	);
+ 
+ 	d_cell obj_fstob
+@@ -1263,7 +1452,10 @@
+ 		.phi1       (objclk.level_p1),
+ 		.phi2       (objclk.level_p2),
+ 		.in         (fstob || object_fstob),
+-		.out        (fstob)
++		.out        (fstob),
++		.ss_en      (ss_en),
++		.ss_si      (ss_obj_start),
++		.ss_so      (ss_obj_fstob)
+ 	);
+ 
+ 	f_cell f_ena
+@@ -1274,7 +1466,10 @@
+ 		.s_n        (count_n),
+ 		.r_n        (~count_n),
+ 		.q          (),
+-		.q_n        (ena_n)
++		.q_n        (ena_n),
++		.ss_en      (ss_en),
++		.ss_si      (ss_obj_fstob),
++		.ss_so      (ss_f_ena)
+ 	);
+ 
+ 	f_cell f_go
+@@ -1285,7 +1480,10 @@
+ 		.s_n        (ena_n || start_n),
+ 		.r_n        (ena_n || start_stop),
+ 		.q          (),
+-		.q_n        (go_n)
++		.q_n        (go_n),
++		.ss_en      (ss_en),
++		.ss_si      (ss_f_ena),
++		.ss_so      (ss_f_go)
+ 	);
+ 
+ 	wire ena_n_or_go_n = (ena_n || go_n);
+@@ -1298,7 +1496,10 @@
+ 		.s_n        (ena_n_or_go_n || f_psc1_q),
+ 		.r_n        (ena_n_or_go_n || f_psc1_q_n),
+ 		.q          (f_psc1_q),
+-		.q_n        (f_psc1_q_n)
++		.q_n        (f_psc1_q_n),
++		.ss_en      (ss_en),
++		.ss_si      (ss_f_go),
++		.ss_so      (ss_f_psc1)
+ 	);
+ 
+ 	wire ena_n_or_go_2 = (ena_n_or_go_n || f_psc1_q_n);
+@@ -1311,7 +1512,10 @@
+ 		.s_n        (ena_n_or_go_2 || f_psc2_q),
+ 		.r_n        (ena_n_or_go_2 || f_psc2_q_n),
+ 		.q          (f_psc2_q),
+-		.q_n        (f_psc2_q_n)
++		.q_n        (f_psc2_q_n),
++		.ss_en      (ss_en),
++		.ss_si      (ss_f_psc1),
++		.ss_so      (ss_f_psc2)
+ 	);
+ 
+ 	wire ena_n_or_go_3 = (ena_n_or_go_2 || f_psc2_q_n);
+@@ -1324,8 +1528,12 @@
+ 		.s_n        (ena_n_or_go_3 || f_psc3_q),
+ 		.r_n        (ena_n_or_go_3 || f_psc3_q_n),
+ 		.q          (f_psc3_q),
+-		.q_n        (f_psc3_q_n)
++		.q_n        (f_psc3_q_n),
++		.ss_en      (ss_en),
++		.ss_si      (ss_f_psc2),
++		.ss_so      (ss_f_psc3)
+ 	);
++	assign ss_so = ss_f_psc3;
+ 
+ endmodule
+ 
+@@ -1343,8 +1551,13 @@
+ 	input           cntd,
+ 	input           pfp,
+ 	input           score,
+-	output [3:0]    col_select // {bk, pf, p1, p0}
++	output [3:0]    col_select, // {bk, pf, p1, p0}
++	input           ss_en,      // Save-state chain
++	input           ss_si,
++	output          ss_so
+ );
++	// Save-state chain through the cells below.
++	logic ss_center_delayed;
+ 
+ 	// Normal priority:
+ 	// 0: P0, M0
+@@ -1371,8 +1584,12 @@
+ 		.r      (blank),
+ 		.s      (cntd),
+ 		.q      (rs_q),
+-		.q_n    (rs_qn)
++		.q_n    (rs_qn),
++		.ss_en  (ss_en),
++		.ss_si  (ss_si),
++		.ss_so  (ss_center_delayed)
+ 	);
++	assign ss_so = ss_center_delayed;
+ 
+ 	wire score_n = ~score;
+ 	wire pfp_n = ~pfp;
+@@ -1404,8 +1621,13 @@
+ 	input  [3:0]    volume,
+ 	input  [4:0]    freq,
+ 	input  [3:0]    audc,
+-	output [3:0]    audio
++	output [3:0]    audio,
++	input           ss_en,  // Save-state chain
++	input           ss_si,
++	output logic    ss_so
+ );
++	// Save-state chain through the cells below.
++	logic ss_freq_div01, ss_freq_div02, ss_noise0_latch, ss_nor2_l, ss_pulse_3, ss_pulse_2, ss_pulse_1, ss_pulse_0;
+ 
+ 	// Audio is quite a lot of convoluted wide nors and odd shifting, so
+ 	// I just got sick of trying to simplify it and did it at gate level.
+@@ -1438,8 +1660,8 @@
+ 	assign freq_div = (aud1 ? (~freq_div2 ? 5'd0 : freq_next) : freq_latch);
+ 	assign freq_match = (freq == freq_div);
+ 
+-	inverter_reg freq_div01(clk, reset, aud0, ~freq_match, freq_div1);
+-	inverter_reg freq_div02(clk, reset, aud1, freq_div1, freq_div2);
++	inverter_reg freq_div01(clk, reset, aud0, ~freq_match, freq_div1, ss_en, ss_si, ss_freq_div01);
++	inverter_reg freq_div02(clk, reset, aud1, freq_div1, freq_div2, ss_en, ss_freq_div01, ss_freq_div02);
+ 
+ 	assign T1 = ~|{~aud0, freq_div2};
+ 	assign T2 = ~|{~aud1, freq_div1};
+@@ -1478,8 +1700,8 @@
+ 	assign pulse_wnor_1 = ~|{pulse3_qn, pulse2_q, pulse1_qn, pulse0_q};
+ 	assign pulse_wnor_2 = ~|{pulse3_q, pulse2_q, pulse1_q};
+ 
+-	inverter_reg noise0_latch(clk, reset, T1, ~noise[0], noise0_latch_n);
+-	inverter_reg nor2_l(clk, reset, T1, nor2, nor2_latch);
++	inverter_reg noise0_latch(clk, reset, T1, ~noise[0], noise0_latch_n, ss_en, ss_freq_div02, ss_noise0_latch);
++	inverter_reg nor2_l(clk, reset, T1, nor2, nor2_latch, ss_en, ss_noise0_latch, ss_nor2_l);
+ 
+ 	wire pulse_clock = ~|{~T2, nor2_latch};
+ 
+@@ -1493,7 +1715,10 @@
+ 		.s_n        (~pulse_bit),
+ 		.r_n        (pulse_bit),
+ 		.q          (pulse3_q),
+-		.q_n        (pulse3_qn)
++		.q_n        (pulse3_qn),
++		.ss_en      (ss_en),
++		.ss_si      (ss_nor2_l),
++		.ss_so      (ss_pulse_3)
+ 	);
+ 	f_cell pulse_2
+ 	(
+@@ -1503,7 +1728,10 @@
+ 		.s_n        (pulse3_q),
+ 		.r_n        (pulse3_qn),
+ 		.q          (pulse2_q),
+-		.q_n        (pulse2_qn)
++		.q_n        (pulse2_qn),
++		.ss_en      (ss_en),
++		.ss_si      (ss_pulse_3),
++		.ss_so      (ss_pulse_2)
+ 	);
+ 	f_cell pulse_1
+ 	(
+@@ -1513,7 +1741,10 @@
+ 		.s_n        (pulse2_q),
+ 		.r_n        (pulse2_qn),
+ 		.q          (pulse1_q),
+-		.q_n        (pulse1_qn)
++		.q_n        (pulse1_qn),
++		.ss_en      (ss_en),
++		.ss_si      (ss_pulse_2),
++		.ss_so      (ss_pulse_1)
+ 	);
+ 	f_cell pulse_0
+ 	(
+@@ -1523,7 +1754,10 @@
+ 		.s_n        (pulse1_q),
+ 		.r_n        (pulse1_qn),
+ 		.q          (pulse0_q),
+-		.q_n        (pulse0_qn)
++		.q_n        (pulse0_qn),
++		.ss_en      (ss_en),
++		.ss_si      (ss_pulse_1),
++		.ss_so      (ss_pulse_0)
+ 	);
+ 
+ 	always_ff @(posedge clk) begin
+@@ -1544,6 +1778,7 @@
+ 			noise_next <= 0;
+ 		end
+ 
++		if (ss_en) {ss_so, freq_next, freq_latch, noise_next, noise_latch} <= {freq_next, freq_latch, noise_next, noise_latch, ss_pulse_0};
+ 	end
+ 
+ 	assign audio = ~pulse0_qn ? volume : 4'd0;
+@@ -1563,7 +1798,10 @@
+ 	output          vsync,
+ 	output          vblank,
+ 	output          auto_pal,
+-	output          f1           // Indicates Odd field of interlaced video
++	output          f1,          // Indicates Odd field of interlaced video
++	input           ss_en,       // Save-state chain
++	input           ss_si,
++	output logic    ss_so
+ );
+ 	localparam ntsc_vb_end = 9'd19; // 19
+ 	localparam pal_vb_end = 9'd23; // 23
+@@ -1711,6 +1949,12 @@
+ 			vsync_en <= 0;
+ 		end
+ 
++		if (ss_en) {ss_so, old_hblank, old_vsync, v_count, total_lines, vsync_line,
++			vsync_en, vsync_set, vblank_en, vsync_override, vsync_count, dot_count,
++			vsync_emulate, pal_mode, region_done, region_frames, pal_sum, ntsc_sum} <=
++			{old_hblank, old_vsync, v_count, total_lines, vsync_line,
++			vsync_en, vsync_set, vblank_en, vsync_override, vsync_count, dot_count,
++			vsync_emulate, pal_mode, region_done, region_frames, pal_sum, ntsc_sum, ss_si};
+ 	end
+ 
+ endmodule
+@@ -1769,8 +2013,15 @@
+ 	output          is_pal,
+ 	output          is_f1,
+ 	input           stabilize,
+-	output logic [3:0] paddle_read // Helper to let us autodetect paddles
++	output logic [3:0] paddle_read, // Helper to let us autodetect paddles
++	// Save-state chain: while ss_en, every register shifts one place
++	// (ss_si in, ss_so out), the rest of the chip standing still.
++	input           ss_en,
++	input           ss_si,
++	output logic    ss_so
+ );
++	// Save-state chain through the cells below.
++	logic ss_hgap1_out, ss_hgap_out, ss_hblank_out, ss_blank_out, ss_stab, ss_clockgen, ss_h_gen, ss_playfield, ss_hmv, ss_pl1, ss_pl2, ss_mis0, ss_mis1, ss_bal, ss_prior, ss_audio0, ss_audio1, ss_in_sr;
+ 
+ logic [7:0] wreg[64]; // Write registers. Only 44 are used.
+ logic [7:0] rreg[16]; // Read registers.
+@@ -1794,6 +2045,7 @@
+ logic old_hblank, old_vsync;
+ logic [1:0] vsync_count;
+ logic hgap_1;
++logic ss_t1, ss_t2, ss_t3; // Save-state chain links between the blocks below
+ 
+ clock_t hclk;
+ clock_t pclk;
+@@ -1819,7 +2071,10 @@
+ 	.s_n        (~hgap_o),
+ 	.r_n        (hgap_o),
+ 	.q          (hgap_1),
+-	.q_n        ()
++	.q_n        (),
++	.ss_en      (ss_en),
++	.ss_si      (ss_si),
++	.ss_so      (ss_hgap1_out)
+ );
+ 
+ f_cell hgap_out
+@@ -1830,7 +2085,10 @@
+ 	.s_n        (~hgap_1),
+ 	.r_n        (hgap_1),
+ 	.q          (hgap),
+-	.q_n        ()
++	.q_n        (),
++	.ss_en      (ss_en),
++	.ss_si      (ss_hgap1_out),
++	.ss_so      (ss_hgap_out)
+ );
+ 
+ f_cell hblank_out
+@@ -1841,7 +2099,10 @@
+ 	.s_n        (~hblank_o),
+ 	.r_n        (hblank_o),
+ 	.q          (hblank),
+-	.q_n        ()
++	.q_n        (),
++	.ss_en      (ss_en),
++	.ss_si      (ss_hgap_out),
++	.ss_so      (ss_hblank_out)
+ );
+ 
+ f_cell blank_out
+@@ -1852,7 +2113,10 @@
+ 	.s_n        (~(~hblank_o && ~vblank_o)),
+ 	.r_n        ((~hblank_o && ~vblank_o)),
+ 	.q          (),
+-	.q_n        (blank)
++	.q_n        (blank),
++	.ss_en      (ss_en),
++	.ss_si      (ss_hblank_out),
++	.ss_so      (ss_blank_out)
+ );
+ 
+ video_stabilize stab
+@@ -1868,7 +2132,10 @@
+ 	.vsync      (vsync),
+ 	.vblank     (vblank),
+ 	.auto_pal   (is_pal),
+-	.f1         (is_f1)
++	.f1         (is_f1),
++	.ss_en      (ss_en),
++	.ss_si      (ss_blank_out),
++	.ss_so      (ss_stab)
+ );
+ 
+ 
+@@ -1884,6 +2151,7 @@
+ 	end
+ 	if (old_vsync && !vsync_o)
+ 		row <= 0;
++	if (ss_en) {ss_t1, old_hblank, old_vsync, hblank_d, column, row} <= {old_hblank, old_vsync, hblank_d, column, row, ss_in_sr};
+ end
+ 
+ // Reads and writes
+@@ -1928,6 +2196,25 @@
+ 		wreg <= '{64{8'h00}};
+ 		wreg[VBLANK][1] <= 1;
+ 	end
++
++	if (ss_en) {ss_t2, phi2_delay, i_out, hmclr, cxclr,
++		wreg[0], wreg[1], wreg[2], wreg[3], wreg[4], wreg[5], wreg[6], wreg[7],
++		wreg[8], wreg[9], wreg[10], wreg[11], wreg[12], wreg[13], wreg[14], wreg[15],
++		wreg[16], wreg[17], wreg[18], wreg[19], wreg[20], wreg[21], wreg[22], wreg[23],
++		wreg[24], wreg[25], wreg[26], wreg[27], wreg[28], wreg[29], wreg[30], wreg[31],
++		wreg[32], wreg[33], wreg[34], wreg[35], wreg[36], wreg[37], wreg[38], wreg[39],
++		wreg[40], wreg[41], wreg[42], wreg[43], wreg[44], wreg[45], wreg[46], wreg[47],
++		wreg[48], wreg[49], wreg[50], wreg[51], wreg[52], wreg[53], wreg[54], wreg[55],
++		wreg[56], wreg[57], wreg[58], wreg[59], wreg[60], wreg[61], wreg[62], wreg[63]} <=
++		{phi2_delay, i_out, hmclr, cxclr,
++		wreg[0], wreg[1], wreg[2], wreg[3], wreg[4], wreg[5], wreg[6], wreg[7],
++		wreg[8], wreg[9], wreg[10], wreg[11], wreg[12], wreg[13], wreg[14], wreg[15],
++		wreg[16], wreg[17], wreg[18], wreg[19], wreg[20], wreg[21], wreg[22], wreg[23],
++		wreg[24], wreg[25], wreg[26], wreg[27], wreg[28], wreg[29], wreg[30], wreg[31],
++		wreg[32], wreg[33], wreg[34], wreg[35], wreg[36], wreg[37], wreg[38], wreg[39],
++		wreg[40], wreg[41], wreg[42], wreg[43], wreg[44], wreg[45], wreg[46], wreg[47],
++		wreg[48], wreg[49], wreg[50], wreg[51], wreg[52], wreg[53], wreg[54], wreg[55],
++		wreg[56], wreg[57], wreg[58], wreg[59], wreg[60], wreg[61], wreg[62], wreg[63], ss_t1};
+ end
+ 
+ // The bus drivers are asynchronous. Their stored sources live in rreg, but
+@@ -2001,7 +2288,10 @@
+ 	.oclk       (oclk),
+ 	.phi0_ll    (),  // reference divider, tied off - see clockgen
+ 	.pclk_gen_edge_p1 (phi1_gen),
+-	.pclk_gen_edge_p2 (phi0_gen)
++	.pclk_gen_edge_p2 (phi0_gen),
++	.ss_en      (ss_en),
++	.ss_si      (ss_stab),
++	.ss_so      (ss_clockgen)
+ );
+ 
+ horiz_gen h_gen
+@@ -2021,7 +2311,10 @@
+ 	.aud1       (aclk1),
+ 	.shb        (shb),
+ 	.rhb        (rhb),
+-	.CB         ()   // colour burst gate, unused outside horiz_gen
++	.CB         (),  // colour burst gate, unused outside horiz_gen
++	.ss_en      (ss_en),
++	.ss_si      (ss_clockgen),
++	.ss_so      (ss_h_gen)
+ );
+ 
+ playfield playfield
+@@ -2034,7 +2327,10 @@
+ 	.reflect    (wreg[CTRLPF][0]),
+ 	.cnt        (cnt),
+ 	.pfc        ({wreg[PF2], wreg[PF1], wreg[PF0][7:4]}),
+-	.pf         (pf)
++	.pf         (pf),
++	.ss_en      (ss_en),
++	.ss_si      (ss_h_gen),
++	.ss_so      (ss_playfield)
+ );
+ 
+ hmove_gen hmv
+@@ -2056,7 +2352,10 @@
+ 	.p1_mclk    (p1ec),
+ 	.m0_mclk    (m0ec),
+ 	.m1_mclk    (m1ec),
+-	.bl_mclk    (blec)
++	.bl_mclk    (blec),
++	.ss_en      (ss_en),
++	.ss_si      (ss_playfield),
++	.ss_so      (ss_hmv)
+ );
+ 
+ player pl1 (
+@@ -2073,7 +2372,10 @@
+ 	.grpnew     (wreg[GRP0]),
+ 	.grpold     (wreg[GRP0O]),
+ 	.msrst      (msrst0),
+-	.p          (p0)
++	.p          (p0),
++	.ss_en      (ss_en),
++	.ss_si      (ss_hmv),
++	.ss_so      (ss_pl1)
+ );
+ 
+ player pl2 (
+@@ -2090,7 +2392,10 @@
+ 	.grpnew     (wreg[GRP1]),
+ 	.grpold     (wreg[GRP1O]),
+ 	.msrst      (msrst1),
+-	.p          (p1)
++	.p          (p1),
++	.ss_en      (ss_en),
++	.ss_si      (ss_pl1),
++	.ss_so      (ss_pl2)
+ );
+ 
+ missile mis0 (
+@@ -2102,7 +2407,10 @@
+ 	.mre        (resm0 || (wreg[RESMP0][1] && msrst0)),
+ 	.men        (wreg[ENAM0][1] && ~wreg[RESMP0][1]),
+ 	.nusiz      (wreg[NUSIZ0][5:0]),
+-	.m          (m0)
++	.m          (m0),
++	.ss_en      (ss_en),
++	.ss_si      (ss_pl2),
++	.ss_so      (ss_mis0)
+ );
+ 
+ missile mis1 (
+@@ -2114,7 +2422,10 @@
+ 	.mre        (resm1 || (wreg[RESMP1][1] && msrst1)),
+ 	.men        (wreg[ENAM1][1] && ~wreg[RESMP1][1]),
+ 	.nusiz      (wreg[NUSIZ1][5:0]),
+-	.m          (m1)
++	.m          (m1),
++	.ss_en      (ss_en),
++	.ss_si      (ss_mis0),
++	.ss_so      (ss_mis1)
+ );
+ 
+ ball bal (
+@@ -2128,7 +2439,10 @@
+ 	.blen_o     (wreg[ENBLO][1]),
+ 	.blvd       (wreg[VDELBL][0]),
+ 	.blsiz      (wreg[CTRLPF][5:4]),
+-	.bl         (bl)
++	.bl         (bl),
++	.ss_en      (ss_en),
++	.ss_si      (ss_mis1),
++	.ss_so      (ss_bal)
+ );
+ 
+ priority_encoder prior
+@@ -2144,7 +2458,10 @@
+ 	.blank      (blank),
+ 	.pfp        (wreg[CTRLPF][2]),
+ 	.score      (wreg[CTRLPF][1]),
+-	.col_select (color_select)
++	.col_select (color_select),
++	.ss_en      (ss_en),
++	.ss_si      (ss_bal),
++	.ss_so      (ss_prior)
+ );
+ 
+ audio_channel audio0
+@@ -2156,7 +2473,10 @@
+ 	.volume     (wreg[AUDV0][3:0]),
+ 	.freq       (wreg[AUDF0][4:0]),
+ 	.audc       (wreg[AUDC0][3:0]),
+-	.audio      (aud0)
++	.audio      (aud0),
++	.ss_en      (ss_en),
++	.ss_si      (ss_prior),
++	.ss_so      (ss_audio0)
+ );
+ 
+ audio_channel audio1
+@@ -2168,22 +2488,28 @@
+ 	.volume     (wreg[AUDV1][3:0]),
+ 	.freq       (wreg[AUDF1][4:0]),
+ 	.audc       (wreg[AUDC1][3:0]),
+-	.audio      (aud1)
++	.audio      (aud1),
++	.ss_en      (ss_en),
++	.ss_si      (ss_audio0),
++	.ss_so      (ss_audio1)
+ );
+ 
+ // Select the correct output register
+-always_ff @(posedge clk) if (oclk.edge_p1) begin
+-	if ((hblank || vblank_o))
+-		{col, lum} <= decomb ? wreg[COLUBK][7:1] : 7'h0; // Blank non-visible areas
+-	else begin
+-		case (color_select)
+-			4'b0001: {col, lum} <= wreg[COLUP0][7:1];
+-			4'b0010: {col, lum} <= wreg[COLUP1][7:1];
+-			4'b0100: {col, lum} <= wreg[COLUPF][7:1];
+-			4'b1000: {col, lum} <= wreg[COLUBK][7:1];
+-			default: {col, lum} <= 7'd0;
+-		endcase
++always_ff @(posedge clk) begin
++	if (oclk.edge_p1) begin
++		if ((hblank || vblank_o))
++			{col, lum} <= decomb ? wreg[COLUBK][7:1] : 7'h0; // Blank non-visible areas
++		else begin
++			case (color_select)
++				4'b0001: {col, lum} <= wreg[COLUP0][7:1];
++				4'b0010: {col, lum} <= wreg[COLUP1][7:1];
++				4'b0100: {col, lum} <= wreg[COLUPF][7:1];
++				4'b1000: {col, lum} <= wreg[COLUBK][7:1];
++				default: {col, lum} <= 7'd0;
++			endcase
++		end
+ 	end
++	if (ss_en) {ss_t3, col, lum} <= {col, lum, ss_t2};
+ end
+ 
+ // WSYNC register controls the RDY signal to the CPU. It is cleared at the start of hblank.
+@@ -2196,7 +2522,10 @@
+ 	.r          (shb),
+ 	.s          (wsync),
+ 	.q          (rdy_q),
+-	.q_n        ()
++	.q_n        (),
++	.ss_en      (ss_en),
++	.ss_si      (ss_audio1),
++	.ss_so      (ss_in_sr)
+ );
+ 
+ // Calculate the collisions
+@@ -2239,6 +2568,12 @@
+ 	if (rst) begin
+ 		rreg <= '{16{8'h00}};
+ 	end
++
++	if (ss_en) {ss_so,
++		rreg[0], rreg[1], rreg[2], rreg[3], rreg[4], rreg[5], rreg[6], rreg[7],
++		rreg[8], rreg[9], rreg[10], rreg[11], rreg[12], rreg[13], rreg[14], rreg[15]} <=
++		{rreg[0], rreg[1], rreg[2], rreg[3], rreg[4], rreg[5], rreg[6], rreg[7],
++		rreg[8], rreg[9], rreg[10], rreg[11], rreg[12], rreg[13], rreg[14], rreg[15], ss_t3};
+ end
+ 
+ endmodule
+--- a/rtl/top.sv
++++ b/rtl/top.sv
+@@ -1134,7 +1134,11 @@
+ 	output logic active_tia,
+ 	output logic edge_source_tia,
+ 	output logic source_stable,
+-	output logic phase_valid
++	output logic phase_valid,
++	// Save-state chain: while ss_en, every register shifts one place.
++	input  logic ss_en,
++	input  logic ss_si,
++	output logic ss_so
+ );
+ 
+ 	typedef enum logic [1:0] {
+@@ -1236,6 +1240,9 @@
+ 				end
+ 			end
+ 		endcase
++
++		if (ss_en) {ss_so, state, target_tia, last_phase2, active_tia, phase_valid} <=
++			{state, target_tia, last_phase2, active_tia, phase_valid, ss_si};
+ 	end
+ 
+ endmodule
+@@ -1255,7 +1262,11 @@
+ 	output logic       maria_en_out,
+ 	output logic       bios_en_out,
+ 	output logic       tia_en_out,
+-	output logic [1:0] writes
++	output logic [1:0] writes,
++	// Save-state chain: while ss_en, every register shifts one place.
++	input  logic       ss_en,
++	input  logic       ss_si,
++	output logic       ss_so
+ );
+ 
+ 	always_ff @(posedge clk) begin
+@@ -1283,6 +1294,8 @@
+ 			if (writes < 2'd2)
+ 				writes <= writes + 1'b1;
+ 		end
++		if (ss_en) {ss_so, lock_out, maria_en_out, bios_en_out, tia_en_out, wrote_once, writes} <=
++			{lock_out, maria_en_out, bios_en_out, tia_en_out, wrote_once, writes, ss_si};
+ 	end
+ endmodule
+ 
+@@ -1305,9 +1318,15 @@
+ 	output        RD,        // read enable
+ 	output        AB_OE,     // 0 while halted: A0-A15 released
+ 	output        RW_OE,     // 0 while halted: R/W released
+-	output logic  is_halted  // This is used to indicate that sally has released the bus
++	output logic  is_halted, // This is used to indicate that sally has released the bus
++	// Save-state chain: while ss_en, every register shifts one place.
++	input         ss_en,
++	input         ss_si,
++	output logic  ss_so
+ );
+ 
++	logic ss_cpu;  // save-state chain link
++
+ 	// The source controller removes MARIA restart and source-handoff hazards.
+ 	// Keep this local pairing gate as the CPU pin invariant: an unexpected
+ 	// duplicate phase must never advance SALLY or any returned system phase.
+@@ -1318,6 +1337,7 @@
+ 	always_ff @(posedge clk_sys) begin
+ 		if      (phi1_en) in_phase2 <= 1'b1;
+ 		else if (phi2_en) in_phase2 <= 1'b0;
++		if (ss_en) {ss_so, in_phase2} <= {in_phase2, ss_cpu};
+ 	end
+ 
+ 	// SALLY pin 39 is the system clock - TIA, RIOT, both cartridge slots and
+@@ -1357,7 +1377,11 @@
+ 		.jammed   (),
+ 
+ 		.dbg_a (), .dbg_x (), .dbg_y (), .dbg_s (),
+-		.dbg_p (), .dbg_ir(), .dbg_pc()
++		.dbg_p (), .dbg_ir(), .dbg_pc(),
++
++		.ss_en    (ss_en),
++		.ss_si    (ss_si),
++		.ss_so    (ss_cpu)
+ 	);
+ 
+ endmodule: M6502C
+--- a/rtl/video_mux.sv
++++ b/rtl/video_mux.sv
+@@ -39,9 +39,18 @@
+ 	output logic [7:0] red,
+ 	output logic [7:0] green,
+ 	output logic [7:0] blue,
+-	output logic       pix_ce
++	output logic       pix_ce,
++
++	// Save-state chain: while ss_en, every register shifts one place. The
++	// blend frame store and the registers only blend uses are not part of a
++	// state.
++	input  logic       ss_en,
++	input  logic       ss_si,
++	output logic       ss_so
+ );
+ 
++logic ss_c1;  // save-state chain link between the two register blocks
++
+ logic [23:0] out_color, nwarm_color, ncool_color, nhot_color,
+ 	pwarm_color, pcool_color, phot_color, custom_color, old_color;
+ 
+@@ -57,6 +66,7 @@
+ always @(posedge clk_sys) begin
+ 	pix_ce_paused_maria <= ~pix_ce_paused_maria;
+ 	pix_ce_paused_tia <= pix_ce_paused_tia + 2'd1;
++	if (ss_en) {ss_c1, pix_ce_paused_maria, pix_ce_paused_tia} <= {pix_ce_paused_maria, pix_ce_paused_tia, ss_si};
+ end
+ wire pix_ce_paused = is_maria ? pix_ce_paused_maria : pix_ce_paused_tia[1];
+ wire pix_ce_immediate = pause ? pix_ce_paused : pix_ce_normal;
+@@ -178,6 +188,14 @@
+ 		hsync <= is_maria ? maria_hsync : tia_hsync;
+ 		hblank <= is_maria ? maria_hblank : tia_hblank;
+ 	end
++
++	// Not frame_ptr, old_color, old_vblank, last_color: only blend uses them
++	// (last_color nothing at all), and on the chain they would keep the blend
++	// frame store alive in a build that ties blend off.
++	if (ss_en) {ss_so, pal_count, pal_buff, pal_mux_addr,
++		pix_ce_delayed, pix_ce, red, green, blue, vsync, vblank, hsync, hblank} <=
++		{pal_count, pal_buff, pal_mux_addr,
++		pix_ce_delayed, pix_ce, red, green, blue, vsync, vblank, hsync, hblank, ss_c1};
+ end
+ 
+ // Palletes research by Robert Tuccitto represents three different console temperatures for each of

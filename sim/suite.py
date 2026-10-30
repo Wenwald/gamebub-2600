@@ -27,6 +27,20 @@
 # phase). Frame lines and audio must be identical, and no pixel may come out
 # after the first few clocks of a pause (so a pause that does nothing fails).
 #
+# Save-state checks (core only, `savestate` selects them; the protocol is
+# in hdl/atari2600_core.sv). ss-chain: the register chain tb_core measures
+# must be CHAIN_BITS of hdl/atari2600_savestate.sv. Each ROM in SAVESTATE runs
+# plainly, with saves at SS_SAVE_AT (which must change nothing) and with a
+# swap at SS_SWAP: the state saved at the first clock count is loaded into a
+# second core that ran the second count on its own, which then carries on.
+# Frame lines and audio must equal the plain run's, no pixel may come out
+# late into the pauses around an operation, and the memories, read straight
+# from the RAM arrays, must be the same as saved, as loaded and after
+# saving. The ROMs of SS_COMPLETE also run the swap in the TRACE=1 build,
+# where sim/core/ss_diff.py compares every signal of the two cores: the
+# check that finds a register left out of the state, whether or not the
+# test ROM would notice it.
+#
 # Menu check (Game Bub only, `menu`): switches.asm shows the console switches
 # and a frame counter; the harness opens the menu (--menu), changes Left
 # Difficulty and TV Type, uses Reset, then closes it; later Resets with the
@@ -153,6 +167,49 @@ PAUSE = [
 ]
 PAUSE_EVERY = '100003,40001'
 PAUSE_FRAMES = 40
+
+# rom, extra args: every bankswitch scheme (forced), the multicarts with
+# console resets, paddles, audio, third-party ROMs (the RIOT timer).
+SAVESTATE = [(rom, ('--mapper', str(m)) + (('--sc',) if sc else ()) if m else ())
+             for rom, (m, sc) in BANKSWITCH.items()]
+SAVESTATE += [(rom, ('--mapper', str(m), '--reset-every', '3')) for rom, (m, _) in MULTICART.items()]
+SAVESTATE += [
+    ('tone', ()),
+    ('pdl_mid', ('--paddle', '128,64')),
+    ('pdl_btna', ('--paddle', '128,64', '--paddle-btn', 'a')),
+    ('../jamesor/test-01', ()),
+    ('../jamesor/test-02', ()),
+    ('../jamesor/test-03', ()),
+    ('../testbr/testbr', ()),
+    ('../videotest/videotest', ()),
+]
+SS_COMPLETE = [
+    ('../testbr/testbr', ()),
+    ('bs_e7', ('--mapper', '12')),
+    ('bs_p2', ('--mapper', '7')),
+    ('bs_fa2', ('--mapper', '25')),
+    ('bs_3e', ('--mapper', '16')),
+    ('bs_cty', ('--mapper', '22')),
+    ('bs_mc4k', ('--mapper', '30', '--reset-every', '3')),
+    ('pdl_mid', ('--paddle', '128,64')),
+]
+# Game Bub (`savestate` with --gamebub): savestate.asm draws a different
+# picture every frame (its counter in RIOT RAM; ss_sc in Superchip RAM).
+# Round trip: run A uses Save State after frame 10 and exits, saving the
+# slot (SLOT_BYTES) as the firmware would; run B starts with that file and
+# uses Load State after frame 3. After the black frame B must show A's
+# frames from the one after the save on, and B's own exit must write the
+# file back unchanged. Refusals: Load State with no file, another ROM's
+# state, a cut-short file, or a state saved with another Superchip setting
+# must set the refused bit and leave the game running exactly as with the
+# menu only opened and closed; with nothing in the slot the exit writes an
+# empty file.
+SS_ROUND_TRIP = ['savestate', 'ss_sc']
+SLOT_BYTES = 0x400 + 0x8200   # hdl/gamebub/atari2600_gamebub.sv
+SS_SAVE_AT = '300001,1234567,2000003'
+SS_SWAP = '2500007,900000'
+SS_FRAMES = 20
+TRACE_BIN = os.path.join(ROOT, 'sim', 'out', 'obj_core_stub_trace', 'Vatari2600_core')
 
 GREEN = 0x329411
 OUT_OF_ORDER = 0xd5d5d5  # the unsupported-cartridge screen's background    # NTSC $C6 in the core's palette
@@ -306,6 +363,148 @@ def check_pause(rom, extra):
     return True, '%d frames and audio identical; %s' % (PAUSE_FRAMES, info)
 
 
+def ss_run(binary, rom, out, extra):
+    r = subprocess.run([binary, os.path.join(ROMS, rom + '.a26'), '--frames', str(SS_FRAMES),
+                        '--out', out, *extra], cwd=UPSTREAM, capture_output=True, text=True)
+    lines = r.stdout.splitlines()
+    frames = [l for l in lines if l.startswith('frame ')]
+    wav = open(os.path.join(out, 'audio.wav'), 'rb').read() if not r.returncode else b''
+    return r.returncode, frames, wav, lines
+
+
+def check_ss_chain():
+    want = None
+    for l in open(os.path.join(ROOT, 'hdl', 'atari2600_savestate.sv')):
+        if 'localparam int CHAIN_BITS' in l:
+            want = int(l.split('=')[1].split(';')[0])
+    r = subprocess.run([BIN, os.path.join(ROMS, 'tone.a26'), '--ss-measure', '--out',
+                        os.path.join(OUT, 'ss-chain')], cwd=UPSTREAM, capture_output=True, text=True)
+    got = next((int(l.split()[2]) for l in r.stdout.splitlines() if l.startswith('ss chain ')), None)
+    if got is None or got != want:
+        return False, 'chain measures %s bits, CHAIN_BITS is %s' % (got, want)
+    return True, 'chain %d bits = CHAIN_BITS' % got
+
+
+def check_savestate(rom, extra):
+    out = os.path.join(OUT, 'savestate', os.path.basename(rom))
+    rc1, f1, w1, _ = ss_run(BIN, rom, out, extra)
+    rc2, f2, w2, l2 = ss_run(BIN, rom, out + '_save', extra + ('--ss-save-at', SS_SAVE_AT))
+    rc3, f3, w3, l3 = ss_run(BIN, rom, out + '_swap', extra + ('--ss-swap-at', SS_SWAP))
+    if rc1 or rc2 or rc3 or len(f1) != SS_FRAMES:
+        return False, 'simulation failed'
+    for tag, f, w, lines, ops in (('save', f2, w2, l2, 3), ('swap', f3, w3, l3, 1)):
+        info = next((l for l in lines if l.startswith('save states: ')), '')
+        if not info.startswith('save states: %d ' % ops) or not info.endswith(' 0 late pixels'):
+            return False, '%s: %s' % (tag, info or 'no operations')
+        if f != f1:
+            n = next(i for i, (a, b) in enumerate(zip(f1 + [''], f + [''])) if a != b)
+            return False, '%s: frame %d differs' % (tag, n)
+        if w != w1:
+            return False, '%s: audio differs' % tag
+    mem = next((l for l in l3 if l.startswith('ss memory: ')), '')
+    if not mem.startswith('ss memory: 0 saved, 0 loaded, 0 after saving,'):
+        return False, mem or 'no memory check'
+    return True, 'saves and swap: %d frames and audio identical, memory the same' % SS_FRAMES
+
+
+def check_ss_complete(rom, extra):
+    out = os.path.join(OUT, 'savestate', os.path.basename(rom) + '_vcd')
+    os.makedirs(out, exist_ok=True)
+    rc, _, _, lines = ss_run(TRACE_BIN, rom, out, extra + ('--ss-swap-at', SS_SWAP, '--ss-vcd', out))
+    if rc:
+        return False, 'simulation failed'
+    r = subprocess.run([sys.executable, os.path.join(ROOT, 'sim', 'core', 'ss_diff.py'), out],
+                       capture_output=True, text=True)
+    res = r.stdout.splitlines()
+    if r.returncode:
+        bad = [l for l in res if ' differs: ' in l]
+        return False, (bad[0] if bad else res[-1] if res else 'ss_diff failed') + \
+            (' (+%d more)' % (len(bad) - 1) if len(bad) > 1 else '')
+    return True, res[-1].split(': ', 1)[1] if res else ''
+
+
+def gb_run(rom, tag, extra, frames=30):
+    out = os.path.join(OUT, 'savestate', tag)
+    os.makedirs(out, exist_ok=True)
+    r = subprocess.run([BIN, os.path.join(ROMS, rom + '.a26'), '--frames', str(frames),
+                        '--out', out, *extra], cwd=UPSTREAM, capture_output=True, text=True)
+    lines = r.stdout.splitlines()
+    crcs = [l.split(' crc ')[1].split()[0] for l in lines if l.startswith('frame ')]
+    status = {l.split()[1]: int(l.split('status ')[1].split(',')[0], 16)
+              for l in lines if l.startswith('ss ')}
+    saved = next((int(l.split()[2]) for l in lines if l.startswith('state saved: ')), None)
+    return r.returncode, crcs, status, saved
+
+
+def state_path(name):
+    return os.path.join(OUT, 'savestate', name + '.state')
+
+
+def check_gb_round_trip(rom):
+    a = state_path(rom + '_a')
+    b = state_path(rom + '_b')
+    rc, fa, sa, size = gb_run(rom, rom + '_a', ('--ss', '10:save', '--state-out', a))
+    if rc or len(fa) != 30:
+        return False, 'run A failed'
+    if 'save' not in sa or (sa['save'] >> 16) & 3 != 3 or size != SLOT_BYTES:
+        return False, 'save: status %08x, %s bytes saved' % (sa.get('save', 0), size)
+    rc, fb, sb, size = gb_run(rom, rom + '_b', ('--state', a, '--ss', '3:load', '--state-out', b))
+    if rc or len(fb) != 30:
+        return False, 'run B failed'
+    if (sb.get('load', 1 << 18) >> 18) & 1:
+        return False, 'load refused (status %08x)' % sb.get('load', 0)
+    # The black frame (the empty frame 0's picture) after the load, then A's
+    # frames from after the save.
+    black = next((i for i in range(4, len(fb)) if fb[i] == fb[0]), None)
+    if black is None or black + 1 >= len(fb) or fb[black + 1] not in fa:
+        return False, 'no black frame, or B does not go on with a frame of A'
+    # Saved after frame 10 was shown, so in the middle of frame 11; B skips
+    # the rest of that one and goes on with frame 12.
+    k = fa.index(fb[black + 1])
+    n = min(len(fa) - k, len(fb) - black - 1)
+    if k != 12 or n < 10 or fa[k:k + n] != fb[black + 1:black + 1 + n]:
+        return False, 'B goes on with A frame %d for %d frames' % (k, n)
+    if size != SLOT_BYTES or open(a, 'rb').read() != open(b, 'rb').read():
+        return False, 'the state file did not come back unchanged'
+    return True, 'B goes on with A frames %d.. (%d frames), file %d bytes kept' % (k, n, SLOT_BYTES)
+
+
+def check_gb_refused():
+    # rom, tag, args before the load, why it must be refused
+    good = state_path('savestate_a')
+    cut = state_path('cut')
+    with open(good, 'rb') as f, open(cut, 'wb') as g:
+        g.write(f.read()[:100])
+    sc_a = state_path('bs_f8sc_a')
+    rc, _, _, _ = gb_run('bs_f8', 'bs_f8sc_a', ('--mapper', '1', '--sc', '--ss', '3:save',
+                                                '--state-out', sc_a), frames=8)
+    if rc:
+        return False, 'Superchip save run failed'
+    cases = [
+        ('savestate', 'none', (), 'no state file'),
+        ('switches', 'other', ('--state', good), "another ROM's state"),   # same size and scheme
+        ('savestate', 'cut', ('--state', cut), 'a cut-short file'),
+        ('bs_f8', 'nosc', ('--mapper', '1', '--state', sc_a), 'another Superchip setting'),
+    ]
+    for rom, tag, args, why in cases:
+        plain_args = tuple(a for a in args if a != '--state' and not a.endswith('.state'))
+        rc1, f1, _, _ = gb_run(rom, tag + '_plain', plain_args + ('--ss', '3:save'), frames=12)
+        out = state_path(tag + '_out')
+        rc2, f2, s2, size = gb_run(rom, tag, args + ('--ss', '3:load', '--state-out', out), frames=12)
+        if rc1 or rc2:
+            return False, '%s: simulation failed' % why
+        if not (s2.get('load', 0) >> 18) & 1:
+            return False, '%s: load not refused (status %08x)' % (why, s2.get('load', 0))
+        # The plain run's menu use (a save) shows no frame either, so the two
+        # must show the same pictures.
+        if f1 != f2:
+            return False, '%s: the game did not run on as before' % why
+        want = 0 if tag in ('none', 'cut') else SLOT_BYTES
+        if size != want:
+            return False, '%s: exit saved %s bytes, want %d' % (why, size, want)
+    return True, 'refused: ' + ', '.join(c[3] for c in cases)
+
+
 def check_menu():
     pal = [int(x, 16) for x in open(os.path.join(UPSTREAM, 'rtl', 'palettes', 'NWARM.hex')).read().split()]
     colour = {pal[b]: b for b in range(0, 256, 2)}   # RGB -> TIA colour byte
@@ -449,6 +648,8 @@ def main(argv):
     only = set(argv)
     targets = [['make', '-s', '-C', os.path.join(ROOT, 'sim', 'testroms')],
                ['make', '-s', '-C', os.path.join(ROOT, 'sim', 'core'), 'VARIANT=stub']]
+    if not GAMEBUB and (not only or 'savestate' in only):
+        targets.append(['make', '-s', '-C', os.path.join(ROOT, 'sim', 'core'), 'VARIANT=stub', 'TRACE=1'])
     if GAMEBUB:
         targets.append(['make', '-s', '-C', os.path.join(ROOT, 'sim', 'gamebub')])
     for target in targets:
@@ -493,6 +694,22 @@ def main(argv):
             print('%-10s %s' % ('pause', ('PASS ' if ok else 'FAIL ') + os.path.basename(rom) + ': ' + info))
             total += 1
             failed += not ok
+    if not GAMEBUB and (not only or 'savestate' in only):
+        ok, info = check_ss_chain()
+        print('%-10s %s' % ('ss-chain', ('PASS ' if ok else 'FAIL ') + info))
+        total += 1
+        failed += not ok
+        with concurrent.futures.ThreadPoolExecutor(os.cpu_count() or 4) as pool:
+            results = list(pool.map(lambda p: check_savestate(*p), SAVESTATE))
+            complete = list(pool.map(lambda p: check_ss_complete(*p), SS_COMPLETE))
+        for (rom, _), (ok, info) in zip(SAVESTATE, results):
+            print('%-10s %s' % ('savestate', ('PASS ' if ok else 'FAIL ') + os.path.basename(rom) + ': ' + info))
+            total += 1
+            failed += not ok
+        for (rom, _), (ok, info) in zip(SS_COMPLETE, complete):
+            print('%-10s %s' % ('ss-signals', ('PASS ' if ok else 'FAIL ') + os.path.basename(rom) + ': ' + info))
+            total += 1
+            failed += not ok
     if not only or 'tone' in only:
         ok, info = check_tone()
         print('%-10s %s' % ('tone', ('PASS ' if ok else 'FAIL ') + info))
@@ -509,6 +726,16 @@ def main(argv):
         if not only or 'menu' in only:
             ok, info = check_menu()
             print('%-10s %s' % ('menu', ('PASS ' if ok else 'FAIL ') + info))
+            total += 1
+            failed += not ok
+        if not only or 'savestate' in only:
+            for rom in SS_ROUND_TRIP:
+                ok, info = check_gb_round_trip(rom)
+                print('%-10s %s' % ('savestate', ('PASS ' if ok else 'FAIL ') + rom + ': ' + info))
+                total += 1
+                failed += not ok
+            ok, info = check_gb_refused()
+            print('%-10s %s' % ('ss-refuse', ('PASS ' if ok else 'FAIL ') + info))
             total += 1
             failed += not ok
         if not only or 'gap' in only:
