@@ -11,12 +11,16 @@
 #   full      the real upstream maria
 #   lockstep  both, stopping on the first cycle they differ
 VARIANT ?= stub
+# TRACE=1 builds with signal tracing, for tb_core --ss-vcd (a separate
+# binary; slower).
+TRACE ?=
 
 ROOT := $(abspath ../..)
 DEF_stub     :=
 DEF_full     := -DMARIA_FULL
 DEF_lockstep := -DMARIA_LOCKSTEP
-OBJ  := $(ROOT)/sim/out/obj_core_$(VARIANT)
+OBJ  := $(ROOT)/sim/out/obj_core_$(VARIANT)$(if $(TRACE),_trace)
+TRACE_FLAGS := $(if $(TRACE),--trace --trace-max-array 256 --trace-max-width 1024 -CFLAGS -DSS_TRACE)
 BIN  := $(OBJ)/Vatari2600_core
 OUTV := $(if $(filter stub,$(VARIANT)),core,core_$(VARIANT))
 # hdl/core.f is the synthesis source list (shared with the FPGA build);
@@ -51,7 +55,7 @@ $(BIN): $(PREP) $(OURS) tb_core.cpp $(FLISTS) ../common/media.h
 	cd $(ROOT) && verilator --cc --exe --build -j 0 -O3 --top-module atari2600_core \
 		-GROM_ADDR_WIDTH=$(ROM_AW) \
 		-DNO_ARM_MAPPER $(DEF_$(VARIANT)) -Wno-fatal -Wno-lint -Wno-style -Wno-TIMESCALEMOD \
-		-Wno-MULTIDRIVEN -LDFLAGS -lz \
+		-Wno-MULTIDRIVEN -LDFLAGS -lz $(TRACE_FLAGS) \
 		--Mdir $(OBJ) -o Vatari2600_core $(SRCS) $(abspath tb_core.cpp)
 
 # Upstream init files ($readmemh "rtl/palettes/...", "rtl/ooo.hex") are

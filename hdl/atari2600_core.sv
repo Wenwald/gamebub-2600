@@ -36,8 +36,29 @@
 // the video pipeline still come out, then the outputs hold. Unlike upstream,
 // video_mux keeps its normal path (no pixels are made up while paused).
 // Reset overrides pause.
+//
+// Save states: everything the console holds, apart from the ROM and what the
+// load leaves behind (the detected scheme, the image size), is a chain of
+// CHAIN_BITS register bits plus MEM_BYTES of memory (atari2600_savestate).
+// Every register of the console's modules sits on the chain (patches/
+// savestate.patch for the upstream ones); while ss_en they all shift one
+// place per clock, ss_si in at one end, ss_so out of the other. Memory is
+// read and written through ss_mem_* while ss_hold is high, with the
+// console's own memory writes blocked; read data comes one clock after the
+// address. An operation goes:
+//   1. pause high, and at least SETTLE clocks for the console to stand still
+//      (block RAM outputs then match the registers that address them);
+//   2. ss_hold high; to save, read MEM_BYTES and shift CHAIN_BITS with ss_so
+//      fed back into ss_si (the chain comes round to where it was); to load,
+//      write MEM_BYTES and shift CHAIN_BITS in from ss_si;
+//   3. ss_hold low, and SETTLE more clocks before pause may drop.
+// While ss_hold is high the video and audio outputs are meaningless.
+// Only the default build saves MARIA's part: MARIA_FULL's real chip is not on
+// the chain.
 
-module atari2600_core #(
+module atari2600_core
+	import atari2600_savestate::*;
+#(
 	parameter int ROM_ADDR_WIDTH = 16   // 64 KB
 ) (
 	input  logic        clk_sys,        // 14.318182 MHz (NTSC)
@@ -85,7 +106,17 @@ module atari2600_core #(
 
 	// Audio: unsigned, 0 = silence, 0x7FFF = both channels at full volume.
 	output logic [15:0] audio_l,
-	output logic [15:0] audio_r
+	output logic [15:0] audio_r,
+
+	// Save states (see above). Only while pause is high.
+	input  logic        ss_hold,
+	input  logic        ss_en,
+	input  logic        ss_si,
+	output logic        ss_so,
+	input  logic [15:0] ss_mem_addr,    // MEM_* map in atari2600_savestate
+	input  logic        ss_mem_we,
+	input  logic  [7:0] ss_mem_wdata,
+	output logic  [7:0] ss_mem_rdata
 );
 
 	// Fixed 2600-mode configuration. Upstream inputs, kept as names so the
@@ -141,6 +172,18 @@ module atari2600_core #(
 	logic [15:0]    AB;
 	logic           RW;
 
+	// Save-state chain, in order: MARIA, phase controller, TIA, paddles,
+	// video_mux, RIOT, CPU, INPUTCTRL, cartridge, then this module's own
+	// registers.
+	logic ss_maria, ss_phase, ss_tia, ss_paddle_a, ss_paddle_b, ss_mux, ss_riot,
+	      ss_cpu, ss_ctrl, ss_cart, ss_c1, ss_c2, ss_c3;
+
+	// Save-state memory regions (MEM_* in atari2600_savestate).
+	wire  ss_mem_cram = ss_mem_addr[15] == MEM_CRAM[15];
+	wire  ss_mem_riot = ss_mem_addr[15:7] == MEM_RIOT[15:7];
+	wire  ss_mem_fa2  = ss_mem_addr[15:8] == MEM_FA2[15:8];
+	logic [7:0] ss_riot_q, ss_fa2_q;
+
 	wire tia_clock_after_reset = cpu_driver && bypass_bios && tia_mode;
 	wire effective_reset = reset | reset_hold;
 	wire phase_source_request_tia = cpu_driver && !effective_reset &&
@@ -168,6 +211,7 @@ module atari2600_core #(
 				reset_hold <= 1'b0;
 			end
 		end
+		if (ss_en) {ss_c1, reset_hold, reset_phase_wait} <= {reset_hold, reset_phase_wait, ss_cart};
 	end
 
 	// SHB and the CPU phase can collapse onto one clk_sys tick in 2600 mode
@@ -179,6 +223,7 @@ module atari2600_core #(
 			tia_RDY_seen_high <= 1'b0;
 		else if (pclk1)
 			tia_RDY_seen_high <= 1'b1;
+		if (ss_en) {ss_c2, tia_RDY_seen_high} <= {tia_RDY_seen_high, ss_c1};
 	end
 
 	assign RDY = maria_RDY && tia_RDY && (~tia_en || tia_RDY_seen_high);
@@ -189,6 +234,7 @@ module atari2600_core #(
 	always_ff @(posedge clk_sys) begin
 		open_bus <= DB;
 		last_address <= AB;
+		if (ss_en) {ss_c3, open_bus, last_address} <= {open_bus, last_address, ss_c2};
 	end
 
 	wire cs_cart = ~|{cs_ram0, cs_ram1, cs_tia, cs_riot, cs_maria};
@@ -225,7 +271,10 @@ module atari2600_core #(
 		.active_tia     (phase_source_tia),
 		.edge_source_tia(phase_edge_source_tia),
 		.source_stable  (phase_source_stable),
-		.phase_valid    (phase_valid)
+		.phase_valid    (phase_valid),
+		.ss_en          (ss_en),
+		.ss_si          (ss_maria),
+		.ss_so          (ss_phase)
 	);
 
 	// MARIA. With MEN low it only divides the clocks and decodes the chip
@@ -234,6 +283,8 @@ module atari2600_core #(
 	// both and stops the simulation on the first cycle where any output this
 	// core uses differs.
 `ifdef MARIA_FULL
+	assign ss_maria = ss_si;   // the real chip is not on the chain
+
 	maria maria_inst(
 `else
 	assign maria_drive_AB = 1'b0;
@@ -258,7 +309,10 @@ module atari2600_core #(
 		.pclk0      (pclk0_m),
 		.pclk1      (pclk1_m),
 		.cs_riot    (cs_riot),
-		.cs_tia     (cs_tia)
+		.cs_tia     (cs_tia),
+		.ss_en      (ss_en),
+		.ss_si      (ss_si),
+		.ss_so      (ss_maria)
 	);
 `endif
 `ifdef MARIA_LOCKSTEP
@@ -417,16 +471,21 @@ module atari2600_core #(
 		.is_pal         (tia_pal),
 		.stabilize      (1'b0),
 		.is_f1          (),
-		.paddle_read    (tia_paddle_read)
+		.paddle_read    (tia_paddle_read),
+		.ss_en          (ss_en),
+		.ss_si          (ss_phase),
+		.ss_so          (ss_tia)
 	);
 
 	// Paddles (upstream Atari7800.sv: paddle_timer per paddle, cleared while
 	// the TIA dumps the pots, i.e. VBLANK bit 7; i_out is ~VBLANK[7]).
 	logic [33:0] paddle_diff_a, paddle_diff_b;
 	paddle_timer paddle_a (clk_sys, ~pause, reset || ~paddle_en, {2'b00, paddle_pos_a},
-	                       ~tia_i_out[0], tia_paddle_read[0], paddle_wire[0], paddle_diff_a);
+	                       ~tia_i_out[0], tia_paddle_read[0], paddle_wire[0], paddle_diff_a,
+	                       ss_en, ss_tia, ss_paddle_a);
 	paddle_timer paddle_b (clk_sys, ~pause, reset || ~paddle_en, {2'b00, paddle_pos_b},
-	                       ~tia_i_out[0], tia_paddle_read[1], paddle_wire[1], paddle_diff_b);
+	                       ~tia_i_out[0], tia_paddle_read[1], paddle_wire[1], paddle_diff_b,
+	                       ss_en, ss_paddle_a, ss_paddle_b);
 	assign tia_i = {paddle[3:2], paddle_en ? paddle_wire : paddle[1:0]};
 
 	// Palette lookup to RGB. The MARIA inputs are unused with is_maria = 0.
@@ -463,7 +522,10 @@ module atari2600_core #(
 		.green          (green),
 		.blue           (blue),
 		.pix_ce         (ce_pix),
-		.blend          (1'b0)
+		.blend          (1'b0),
+		.ss_en          (ss_en),
+		.ss_si          (ss_paddle_b),
+		.ss_so          (ss_mux)
 	);
 
 	// Raw TIA colour, timed like red/green/blue: video_mux addresses its
@@ -479,6 +541,7 @@ module atari2600_core #(
 			tia_color_q <= {tia_chroma, tia_luma};
 		if (tia_pix_ce_q)
 			color <= tia_color_q;
+		if (ss_en) {ss_so, tia_pix_ce_q, tia_color_q, color} <= {tia_pix_ce_q, tia_color_q, color, ss_c3};
 	end
 
 	// TIA audio through the non-linear mixing table (top.sv:578-594). Mono:
@@ -521,7 +584,15 @@ module atari2600_core #(
 		.PB_in        (PBin),
 		.PB_out       (PBout),
 		.oe           (riot_DB_oe),
-		.PA_read      ()
+		.PA_read      (),
+		.ss_hold      (ss_hold),
+		.ss_en        (ss_en),
+		.ss_si        (ss_mux),
+		.ss_so        (ss_riot),
+		.ss_mem_addr  (ss_mem_addr[6:0]),
+		.ss_mem_we    (ss_mem_we && ss_mem_riot),
+		.ss_mem_wdata (ss_mem_wdata),
+		.ss_mem_q     (ss_riot_q)
 	);
 
 	M6502C cpu_inst
@@ -543,7 +614,10 @@ module atari2600_core #(
 		.NMI_n        (NMI_n),
 		.RDY          (RDY),
 		.halt_n       (cpu_halt_n),
-		.is_halted    ()
+		.is_halted    (),
+		.ss_en        (ss_en),
+		.ss_si        (ss_riot),
+		.ss_so        (ss_cpu)
 	);
 
 	ctrl_reg ctrl
@@ -560,7 +634,10 @@ module atari2600_core #(
 		.bios_en_out  (bios_en_b),
 		.tia_en_out   (tia_en),
 		.writes       (ctrl_writes),
-		.tia_mode     (tia_mode)
+		.tia_mode     (tia_mode),
+		.ss_en        (ss_en),
+		.ss_si        (ss_cpu),
+		.ss_so        (ss_ctrl)
 	);
 
 	//////////////////////
@@ -568,7 +645,8 @@ module atari2600_core #(
 	//////////////////////
 
 	// ROM image size, as MiSTer's a78_cart_extent computes it for a 2600 file:
-	// the last load address plus one.
+	// the last load address plus one. Like the detector's result, set by the
+	// load alone, so not part of a save state.
 	logic [31:0] cart_size = 32'd4096;
 	always_ff @(posedge clk_sys)
 		if (load_valid) cart_size <= {7'd0, load_addr} + 32'd1;
@@ -624,12 +702,21 @@ module atari2600_core #(
 	spram #(.addr_width(15), .mem_name("CRAM")) cart_ram
 	(
 		.clock   (clk_sys),
-		.address (cartram_addr[14:0]),
-		.data    (cartram_wrdata),
-		.wren    (cartram_wr),
+		.address (ss_hold ? ss_mem_addr[14:0] : cartram_addr[14:0]),
+		.data    (ss_hold ? ss_mem_wdata : cartram_wrdata),
+		.wren    (ss_hold ? ss_mem_we && ss_mem_cram : cartram_wr),
 		.cs      (1'b1),
 		.q       (cartram_q)
 	);
+
+	// Save-state memory read data, one clock after the address like the block
+	// RAMs themselves.
+	logic [1:0] ss_mem_sel;
+	always_ff @(posedge clk_sys)
+		ss_mem_sel <= ss_mem_cram ? 2'd0 : ss_mem_riot ? 2'd1 : ss_mem_fa2 ? 2'd2 : 2'd3;
+	assign ss_mem_rdata = ss_mem_sel == 2'd0 ? cartram_q :
+	                      ss_mem_sel == 2'd1 ? ss_riot_q :
+	                      ss_mem_sel == 2'd2 ? ss_fa2_q : 8'hFF;
 
 	// What the 2600 slot sees on the data lines (top.sv:1012-1015).
 	wire [7:0] cart_din = RW ? read_DB : write_DB;
@@ -728,7 +815,15 @@ module atari2600_core #(
 		.oe             (cart_DB_oe),
 		.tape_audio     (),
 		.tape_in        (2'd0),
-		.fix_sc_cs      (1'b0)
+		.fix_sc_cs      (1'b0),
+		.ss_hold        (ss_hold),
+		.ss_en          (ss_en),
+		.ss_si          (ss_ctrl),
+		.ss_so          (ss_cart),
+		.ss_mem_addr    (ss_mem_addr[7:0]),
+		.ss_mem_we      (ss_mem_we && ss_mem_fa2),
+		.ss_mem_wdata   (ss_mem_wdata),
+		.ss_mem_q       (ss_fa2_q)
 	);
 
 endmodule

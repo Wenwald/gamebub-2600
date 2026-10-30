@@ -8,6 +8,20 @@
       "value": "0x1"
     },
     {
+      "id": 7,
+      "label": "Save State",
+      "type": "action",
+      "address": "0x00002004",
+      "value": "0x1"
+    },
+    {
+      "id": 8,
+      "label": "Load State",
+      "type": "action",
+      "address": "0x00002008",
+      "value": "0x1"
+    },
+    {
       "id": 1,
       "label": "Left Difficulty",
       "type": "list",

@@ -31,7 +31,12 @@ module maria_2600 (
 	output logic        pclk1,
 
 	output logic        cs_riot,
-	output logic        cs_tia
+	output logic        cs_tia,
+
+	// Save-state chain: while ss_en, every register shifts one place.
+	input  logic        ss_en,
+	input  logic        ss_si,
+	output logic        ss_so
 );
 
 	logic       clk_toggle = 1'b0;
@@ -80,6 +85,11 @@ module maria_2600 (
 				end
 			end
 		end
+
+		if (ss_en) {ss_so, mclk0, mclk1, pclk0, pclk1, clk_toggle, pclk_toggle, clock_div,
+			slow_clk_latch, tia_enable_count} <=
+			{mclk0, mclk1, pclk0, pclk1, clk_toggle, pclk_toggle, clock_div,
+			slow_clk_latch, tia_enable_count, ss_si};
 	end
 
 	// 2600 memory map (control.sv, MEN low): A12 low selects the console;

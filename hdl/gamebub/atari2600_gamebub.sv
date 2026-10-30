@@ -20,9 +20,17 @@
 // from the menu restarts the console, still frozen, and blanks the screen
 // behind the menu (see "Console").
 //
+// Save state: one slot in block RAM, which is also file id 1 (files.json:
+// "<rom>.state" next to the ROM, read in after the ROM and written back by
+// the firmware when the core exits). Save State copies the console into it,
+// Load State copies it back if it was saved from this ROM with this
+// bankswitch scheme, and shows a black frame like Reset (see "Save state").
+//
 // Core memory map (32-bit registers):
 //   0x0000_0000  r   status: [0] ROM loaded, [1] load error, [13:8] mapper,
-//                    [14] Superchip
+//                    [14] Superchip, [16] the slot holds a state this ROM can
+//                    load, [17] the slot holds a state at all, [18] the last
+//                    Load State was refused
 //   0x0000_1000  rw  left difficulty  (1 = A, 0 = B)
 //   0x0000_1004  rw  right difficulty (1 = A, 0 = B)
 //   0x0000_1008  rw  TV type (1 = colour, 0 = B&W)
@@ -31,14 +39,20 @@
 //   0x0000_1014  rw  controller (0 = joystick, 1 = paddle)
 //   0x0000_2000  w   any write: console reset (power cycle; multicarts move on);
 //                    unfocused, also a black frame
+//   0x0000_2004  w   any write: Save State
+//   0x0000_2008  w   any write: Load State
 //   0x3000_0000  w   ROM file (file id 0), little-endian words, byte offset =
 //                    address bits [27:0]
+//   0x4000_0000  rw  save-state slot (file id 1), little-endian words,
+//                    SLOT_BYTES long (layout under "Save state")
 //   0xF000_0000  rw  host command opcode / result
 //   0xF000_0004  rw  host command argument
 
 `default_nettype none
 
-module atari2600_gamebub #(
+module atari2600_gamebub
+	import atari2600_savestate::*;
+#(
 	parameter int DISPLAY_DIVIDER = 23,
 	parameter int ROM_ADDR_WIDTH  = 16,   // 64 KB cartridge ROM in block RAM
 	parameter int V_START         = 16    // first kept line, counted from VSYNC
@@ -122,7 +136,15 @@ module atari2600_gamebub #(
 	localparam logic [31:0] STATUS_CORE_HALT = 32'd3;
 	localparam logic [31:0] STATUS_CORE_RUN  = 32'd4;
 
-	localparam logic [31:0] FILE_ROM = 32'd0;
+	localparam logic [31:0] FILE_ROM   = 32'd0;
+	localparam logic [31:0] FILE_STATE = 32'd1;
+
+	// The save-state slot's layout (see "Save state").
+	localparam int SLOT_CHAIN  = 'h040;
+	localparam int SLOT_MEM    = 'h400;
+	localparam int SLOT_BYTES  = SLOT_MEM + MEM_BYTES;
+	localparam int SLOT_WORDS  = SLOT_BYTES / 4;
+	localparam int SLOT_AW     = $clog2(SLOT_WORDS);
 
 	typedef enum logic [1:0] {
 		CMD_IDLE,
@@ -146,6 +168,23 @@ module atari2600_gamebub #(
 	logic       set_diff_left, set_diff_right, set_color, set_sc, set_paddle;
 	logic [5:0] set_mapper;
 	logic       reset_request;  // console reset action (one cycle)
+	logic       save_request, load_request;  // Save / Load State actions (one cycle)
+
+	// The ROM as loaded, for the save-state header: size and CRC-32.
+	logic [31:0] rom_bytes, rom_crc;
+
+	// Save-state slot (see "Save state"): its block RAM's host port, and
+	// what the slot holds.
+	logic        state_loading;     // between FileWriteStart(1) and FileWriteEnd(1)
+	logic        state_file_start;  // FileWriteStart(1) (one cycle)
+	logic        state_file_end;    // FileWriteEnd(1): check the header (one cycle)
+	logic [15:0] state_words;       // words of the file so far (a whole slot or nothing)
+	logic        state_ok;          // a state this ROM can load
+	logic        state_present;     // a state at all (it is saved back to the card)
+	logic        state_refused;     // the last Load State found nothing to load
+	logic        state_window, state_read;
+	logic [31:0] slot_q_a;
+	logic [31:0] mem_rdata_reg;
 
 	// Memory access mirror and the ROM byte writer.
 	logic        mem_busy;
@@ -158,7 +197,13 @@ module atari2600_gamebub #(
 
 	assign mem_start  = host_mem_enable && !mem_busy;
 	assign rom_window = host_mem_address[31:28] == 4'h3;
+	assign state_window = host_mem_address[31:28] == 4'h4;
+	wire [SLOT_AW-1:0] slot_addr_a = host_mem_address[SLOT_AW+1:2];
+	wire               slot_we_a   = mem_start && host_mem_write && state_window && state_loading;
 	assign host_mem_done = mem_busy && !rom_writing;
+	// Slot reads come straight from its block RAM, valid from the cycle
+	// after the access starts (the one with done) for as long as it is held.
+	assign host_mem_dataRead = state_read ? slot_q_a : mem_rdata_reg;
 
 	logic        core_load_valid;
 	logic [24:0] core_load_addr;
@@ -173,6 +218,15 @@ module atari2600_gamebub #(
 	assign core_load_addr  = rom_byte_addr[24:0];
 	assign core_load_data  = rom_word[8 * rom_byte +: 8];
 
+	// CRC-32 (IEEE 802.3, reflected, as zlib's crc32) of one more byte.
+	function automatic logic [31:0] crc32_byte(input logic [31:0] crc, input logic [7:0] b);
+		logic [31:0] c;
+		c = crc ^ {24'd0, b};
+		for (int i = 0; i < 8; i++)
+			c = c[0] ? (c >> 1) ^ 32'hEDB8_8320 : c >> 1;
+		return c;
+	endfunction
+
 	assign host_commandHost_busy  = 1'b0;
 	assign host_commandHost_done  = cmd_state == CMD_DONE;
 	assign host_commandHost_error = cmd_state == CMD_ERROR;
@@ -182,10 +236,16 @@ module atari2600_gamebub #(
 		load_start    <= 1'b0;
 		load_end      <= 1'b0;
 		reset_request <= 1'b0;
+		save_request  <= 1'b0;
+		load_request  <= 1'b0;
+		state_file_start <= 1'b0;
+		state_file_end   <= 1'b0;
 
 		if (reset) begin
 			mem_busy          <= 1'b0;
-			host_mem_dataRead <= 32'd0;
+			mem_rdata_reg     <= 32'd0;
+			state_read        <= 1'b0;
+			state_loading     <= 1'b0;
 			rom_writing       <= 1'b0;
 			cmd_state         <= CMD_IDLE;
 			cmd_reg0          <= 32'd0;
@@ -230,29 +290,42 @@ module atari2600_gamebub #(
 						32'h0000_1010: set_sc         <= host_mem_dataWrite[0];
 						32'h0000_1014: set_paddle     <= host_mem_dataWrite[0];
 						32'h0000_2000: reset_request  <= 1'b1;
+						32'h0000_2004: save_request   <= 1'b1;
+						32'h0000_2008: load_request   <= 1'b1;
 						32'hF000_0000: cmd_reg0       <= host_mem_dataWrite;
 						32'hF000_0004: cmd_reg1       <= host_mem_dataWrite;
-						default: ;
+						default: ;   // the slot window is written below ("Save state")
 					endcase
 				end
 			end else if (mem_start) begin
 				case (host_mem_address)
-					32'h0000_0000: host_mem_dataRead <= {17'd0, core_mapper_sc, core_mapper,
-					                                     6'd0, load_error, rom_loaded};
-					32'h0000_1000: host_mem_dataRead <= {31'd0, set_diff_left};
-					32'h0000_1004: host_mem_dataRead <= {31'd0, set_diff_right};
-					32'h0000_1008: host_mem_dataRead <= {31'd0, set_color};
-					32'h0000_100C: host_mem_dataRead <= {26'd0, set_mapper};
-					32'h0000_1010: host_mem_dataRead <= {31'd0, set_sc};
-					32'h0000_1014: host_mem_dataRead <= {31'd0, set_paddle};
-					32'hF000_0000: host_mem_dataRead <= cmd_reg0;
-					32'hF000_0004: host_mem_dataRead <= cmd_reg1;
-					default:       host_mem_dataRead <= 32'd0;
+					32'h0000_0000: mem_rdata_reg <= {13'd0, state_refused, state_present, state_ok,
+					                                 1'b0, core_mapper_sc, core_mapper,
+					                                 6'd0, load_error, rom_loaded};
+					32'h0000_1000: mem_rdata_reg <= {31'd0, set_diff_left};
+					32'h0000_1004: mem_rdata_reg <= {31'd0, set_diff_right};
+					32'h0000_1008: mem_rdata_reg <= {31'd0, set_color};
+					32'h0000_100C: mem_rdata_reg <= {26'd0, set_mapper};
+					32'h0000_1010: mem_rdata_reg <= {31'd0, set_sc};
+					32'h0000_1014: mem_rdata_reg <= {31'd0, set_paddle};
+					32'hF000_0000: mem_rdata_reg <= cmd_reg0;
+					32'hF000_0004: mem_rdata_reg <= cmd_reg1;
+					default:       mem_rdata_reg <= 32'd0;
 				endcase
 			end
+			if (mem_start)
+				state_read <= !host_mem_write && state_window;
+			if (slot_we_a && state_words != 16'hFFFF)
+				state_words <= state_words + 16'd1;
 
 			// ---- ROM bytes: one per cycle, then the access completes ----
+			if (load_start) begin
+				rom_bytes <= 32'd0;
+				rom_crc   <= 32'hFFFF_FFFF;
+			end
 			if (rom_writing) begin
+				rom_bytes <= rom_bytes + 32'd1;
+				rom_crc   <= crc32_byte(rom_crc, core_load_data);
 				load_any <= 1'b1;
 				if (!rom_byte_fits)
 					load_error <= 1'b1;
@@ -282,6 +355,10 @@ module atari2600_gamebub #(
 								load_error  <= 1'b0;
 								load_any    <= 1'b0;
 								load_start  <= 1'b1;
+							end else if (cmd_reg1 == FILE_STATE) begin
+								state_loading    <= 1'b1;
+								state_file_start <= 1'b1;
+								state_words      <= 16'd0;
 							end
 						CMD_FILE_WRITE_END:
 							if (cmd_reg1 == FILE_ROM) begin
@@ -292,8 +369,18 @@ module atari2600_gamebub #(
 								rom_loaded  <= load_any && !load_error;
 								if (!load_any || load_error)
 									cmd_state <= CMD_ERROR;
+							end else if (cmd_reg1 == FILE_STATE) begin
+								// Any size, none included: the header says
+								// whether it holds a state.
+								state_loading  <= 1'b0;
+								state_file_end <= 1'b1;
 							end
-						CMD_FILE_READ_START, CMD_FILE_READ_END: ;
+						// The size to save back: the whole slot if it holds
+						// a state, else nothing (an empty file).
+						CMD_FILE_READ_START:
+							if (cmd_reg1 == FILE_STATE)
+								cmd_reg0 <= state_present ? 32'(SLOT_BYTES) : 32'd0;
+						CMD_FILE_READ_END: ;
 						default: cmd_state <= CMD_ERROR;
 					endcase
 				end
@@ -335,7 +422,14 @@ module atari2600_gamebub #(
 	logic [8:0] black_x;       // BLACK_W = the row's hblank cycle
 	logic [7:0] black_y;
 
-	wire black_begin = reset_request && !core_focus;
+	logic        ss_busy, ss_loaded;  // a save-state operation runs / a load just ended (see "Save state")
+	logic [15:0] ss_paddle_pos;       // paddle A's position, from the loaded state
+	logic        ss_hold, ss_en, ss_si, ss_so;   // the core's save-state port
+	logic [15:0] ss_mem_addr;
+	logic        ss_mem_we;
+	logic  [7:0] ss_mem_wdata, ss_mem_rdata;
+
+	wire black_begin = (reset_request && !core_focus) || ss_loaded;
 
 	always_ff @(posedge clock) begin
 		if (reset) begin
@@ -360,7 +454,7 @@ module atari2600_gamebub #(
 		end
 	end
 
-	wire core_pause = !core_focus || black_busy;
+	wire core_pause = !core_focus || black_busy || ss_busy;
 
 	// Paddle on the d-pad. Paddle A's position (upstream's 0..255 "kohms";
 	// the game reads roughly 3/4 of it as its line count) moves while Left
@@ -393,6 +487,11 @@ module atari2600_gamebub #(
 		if (reset || load_start) begin
 			paddle_tick <= '0;
 			paddle_pos  <= 16'h8000;
+			paddle_vel  <= PADDLE_VMIN;
+			paddle_ramp <= 2'd0;
+		end else if (ss_loaded) begin
+			// The knob goes back where it was when the state was saved.
+			paddle_pos  <= ss_paddle_pos;
 			paddle_vel  <= PADDLE_VMIN;
 			paddle_ramp <= 2'd0;
 		end else if (paddle_tick == '1) begin
@@ -458,13 +557,277 @@ module atari2600_gamebub #(
 		.ce_pix          (core_ce_pix),
 		.tia_pal         (),
 		.audio_l         (core_audio_l),
-		.audio_r         (core_audio_r)
+		.audio_r         (core_audio_r),
+		.ss_hold         (ss_hold),
+		.ss_en           (ss_en),
+		.ss_si           (ss_si),
+		.ss_so           (ss_so),
+		.ss_mem_addr     (ss_mem_addr),
+		.ss_mem_we       (ss_mem_we),
+		.ss_mem_wdata    (ss_mem_wdata),
+		.ss_mem_rdata    (ss_mem_rdata)
 	);
 
 	// TIA mix: unsigned 0 (silence) .. 0x7FFF, so it is also a valid
-	// non-negative signed sample and silence is 0.
-	assign audio_left  = core_audio_l;
-	assign audio_right = core_audio_r;
+	// non-negative signed sample and silence is 0. Held while a save-state
+	// operation has the console's outputs scrambled.
+	logic [15:0] audio_l_q, audio_r_q;
+	always_ff @(posedge clock)
+		if (!ss_hold) {audio_l_q, audio_r_q} <= {core_audio_l, core_audio_r};
+	assign audio_left  = ss_hold ? audio_l_q : core_audio_l;
+	assign audio_right = ss_hold ? audio_r_q : core_audio_r;
+
+	// =========================================================================
+	// Save state
+	// =========================================================================
+	// One slot, SLOT_BYTES of block RAM, in this layout (little-endian
+	// words):
+	//   0x000  header: 0 magic "ATSS", 1 {console 1 = 2600, format 1},
+	//          2 CHAIN_BITS, 3 MEM_BYTES, 4 ROM size, 5 ROM CRC-32,
+	//          6 {Superchip, bankswitch scheme} as status bits [14:8],
+	//          7 paddle A's position (8.8)
+	//   0x040  the register chain, bit i at byte i / 8, bit i % 8
+	//   0x400  the console's memory (MEM_BYTES, as ss_mem_addr maps it)
+	// A state is loadable when header words 0-6 match this ROM, scheme and
+	// core; the slot is saved back to the card whenever word 0 is right.
+	//
+	// The sequence follows hdl/atari2600_core.sv: the console paused (and the
+	// framework still shown its last whole frame), SETTLE clocks, the
+	// operation, SETTLE clocks. A load ends with the black frame of Reset
+	// (see "Console"), whose line counter restart makes the game's next
+	// frame the first one drawn. A Load State is first checked against the
+	// header, and refused (status bit 18) if nothing loadable is there.
+	localparam logic [31:0] SS_MAGIC  = 32'h5353_5441;   // "ATSS"
+	localparam logic [31:0] SS_FORMAT = 32'h0000_0101;   // console 1, format 1
+
+	// The chain area holds 8 * (SLOT_MEM - SLOT_CHAIN) = 7680 bits; CHAIN_BITS
+	// is 3365.
+
+	// The slot: port A the host's (whole words), port B the sequencer's.
+	// ram_decomp "power": Vivado's default split of a depth just over 8K
+	// takes 16 RAMB36; split by width it takes 9 (and keeps byte writes).
+	(* ram_decomp = "power" *) logic [31:0] slot [SLOT_WORDS];
+	logic [SLOT_AW-1:0] slot_addr_b;
+	logic  [3:0]        slot_we_b;
+	logic [31:0]        slot_wdata_b, slot_q_b;
+
+	always_ff @(posedge clock) begin
+		if (slot_we_a)
+			slot[slot_addr_a] <= host_mem_dataWrite;
+		slot_q_a <= slot[slot_addr_a];
+	end
+	always_ff @(posedge clock) begin
+		for (int i = 0; i < 4; i++)
+			if (slot_we_b[i])
+				slot[slot_addr_b][8 * i +: 8] <= slot_wdata_b[8 * i +: 8];
+		slot_q_b <= slot[slot_addr_b];
+	end
+
+	// Header word n as this ROM and core would write it.
+	function automatic logic [31:0] header(input int n);
+		case (n)
+			0: return SS_MAGIC;
+			1: return SS_FORMAT;
+			2: return 32'(CHAIN_BITS);
+			3: return 32'(MEM_BYTES);
+			4: return rom_bytes;
+			5: return ~rom_crc;
+			6: return {24'd0, core_mapper_sc, 1'b0, core_mapper};
+			default: return {16'd0, paddle_pos};
+		endcase
+	endfunction
+
+	typedef enum logic [2:0] {
+		SS_IDLE,
+		SS_CHECK,   // read header words 0-7, compare 0-6
+		SS_PRE,     // SETTLE paused clocks
+		SS_MEM,     // memory, one byte a clock
+		SS_CPREP,   // first chain byte on its way (load)
+		SS_CHAIN,   // the chain, one bit a clock
+		SS_HEADER,  // header words (save)
+		SS_POST     // SETTLE paused clocks
+	} ss_state_t;
+
+	ss_state_t   ss_state;
+	logic        ss_save;       // this operation saves (else loads)
+	logic        ss_check_only; // a check after the file came in
+	logic [15:0] ss_i;          // clock within the phase
+	logic        ss_match_magic, ss_match;
+	logic  [7:0] ss_acc;        // chain bits of the byte being saved
+
+	assign ss_busy = ss_state != SS_IDLE && !ss_check_only;
+	assign ss_hold = ss_state == SS_MEM || ss_state == SS_CPREP || ss_state == SS_CHAIN;
+	assign ss_en   = ss_state == SS_CHAIN;
+
+	// Byte b of the slot as port B reads it (the word of the clock before).
+	function automatic logic [7:0] slot_byte(input logic [31:0] w, input logic [1:0] b);
+		return w[8 * b +: 8];
+	endfunction
+
+	wire [15:0] ss_mem_prev   = ss_i - 16'd1;              // the byte port B read or the core gave last clock
+	wire [15:0] ss_chain_byte = 16'(SLOT_CHAIN) + (ss_i >> 3);
+	wire [15:0] ss_next_byte  = 16'(SLOT_CHAIN) + ((ss_i + 16'd1) >> 3);
+	wire  [7:0] ss_acc_now    = ss_acc | (8'(ss_so) << ss_i[2:0]);
+	wire        ss_chain_last = ss_i == 16'(CHAIN_BITS - 1);
+
+	always_comb begin
+		slot_addr_b  = '0;
+		slot_we_b    = 4'd0;
+		slot_wdata_b = 32'd0;
+		ss_mem_addr  = 16'd0;
+		ss_mem_we    = 1'b0;
+		ss_mem_wdata = 8'd0;
+		ss_si        = 1'b0;
+		case (ss_state)
+			SS_CHECK: slot_addr_b = SLOT_AW'(ss_i);
+			SS_MEM: begin
+				if (ss_save) begin
+					// Core memory at ss_i; last clock's byte into the slot.
+					ss_mem_addr = ss_i;
+					if (ss_i != 16'd0) begin
+						slot_addr_b  = SLOT_AW'((16'(SLOT_MEM) + ss_mem_prev) >> 2);
+						slot_we_b    = 4'd1 << ss_mem_prev[1:0];
+						slot_wdata_b = {4{ss_mem_rdata}};
+					end
+				end else begin
+					// Slot byte ss_i on its way; last clock's into the core.
+					if (ss_i != 16'(MEM_BYTES))
+						slot_addr_b = SLOT_AW'((16'(SLOT_MEM) + ss_i) >> 2);
+					if (ss_i != 16'd0) begin
+						ss_mem_addr  = ss_mem_prev;
+						ss_mem_we    = 1'b1;
+						ss_mem_wdata = slot_byte(slot_q_b, ss_mem_prev[1:0]);
+					end
+				end
+			end
+			SS_CPREP: slot_addr_b = SLOT_AW'(SLOT_CHAIN >> 2);
+			SS_CHAIN: begin
+				if (ss_save) begin
+					// Round the chain once; each bit into its byte.
+					ss_si = ss_so;
+					if (ss_i[2:0] == 3'd7 || ss_chain_last) begin
+						slot_addr_b  = SLOT_AW'(ss_chain_byte >> 2);
+						slot_we_b    = 4'd1 << ss_chain_byte[1:0];
+						slot_wdata_b = {4{ss_acc_now}};
+					end
+				end else begin
+					// The byte of bit ss_i came in this clock; ask for the
+					// next clock's.
+					slot_addr_b = SLOT_AW'(ss_next_byte >> 2);
+					ss_si = slot_byte(slot_q_b, ss_chain_byte[1:0])[ss_i[2:0]];
+				end
+			end
+			SS_HEADER: begin
+				slot_addr_b  = SLOT_AW'(ss_i);
+				slot_we_b    = 4'hF;
+				slot_wdata_b = header(int'(ss_i));
+			end
+			default: ;
+		endcase
+	end
+
+	always_ff @(posedge clock) begin
+		ss_loaded <= 1'b0;
+		if (reset) begin
+			ss_state      <= SS_IDLE;
+			ss_check_only <= 1'b0;
+			state_ok      <= 1'b0;
+			state_present <= 1'b0;
+			state_refused <= 1'b0;
+		end else begin
+			ss_i <= ss_i + 16'd1;
+			case (ss_state)
+				SS_IDLE: begin
+					ss_i           <= 16'd0;
+					ss_match_magic <= 1'b1;
+					ss_match       <= 1'b1;
+					ss_check_only  <= 1'b0;
+					if (state_file_end) begin
+						ss_state      <= SS_CHECK;
+						ss_check_only <= 1'b1;
+					end else if (rom_loaded && !core_reset && !state_loading) begin
+						if (save_request) begin
+							ss_save  <= 1'b1;
+							ss_state <= SS_PRE;
+						end else if (load_request) begin
+							ss_save  <= 1'b0;
+							ss_state <= SS_CHECK;
+						end
+					end
+				end
+				SS_CHECK: begin
+					// Word ss_i - 1 came in this clock.
+					if (ss_i != 16'd0) begin
+						if (ss_i == 16'd1 && slot_q_b != header(0))
+							ss_match_magic <= 1'b0;
+						if (ss_i <= 16'd7 && slot_q_b != header(int'(ss_mem_prev)))
+							ss_match <= 1'b0;
+						if (ss_i == 16'd8)
+							ss_paddle_pos <= slot_q_b[15:0];
+					end
+					if (ss_i == 16'd8) begin
+						ss_i <= 16'd0;
+						if (ss_check_only) begin
+							// A file holds a state only if it fills the slot.
+							state_present <= ss_match_magic && state_words == 16'(SLOT_WORDS);
+							state_ok      <= ss_match && state_words == 16'(SLOT_WORDS);
+							ss_state      <= SS_IDLE;
+						end else begin
+							// state_present: a whole slot came in, or was saved.
+							state_refused <= !(ss_match && state_present);
+							ss_state      <= ss_match && state_present ? SS_PRE : SS_IDLE;
+						end
+					end
+				end
+				SS_PRE:
+					if (ss_i == 16'(SETTLE - 1)) begin
+						ss_i     <= 16'd0;
+						ss_state <= SS_MEM;
+					end
+				SS_MEM:
+					if (ss_i == 16'(MEM_BYTES)) begin
+						ss_i     <= 16'd0;
+						ss_acc   <= 8'd0;
+						ss_state <= ss_save ? SS_CHAIN : SS_CPREP;
+					end
+				SS_CPREP: begin
+					ss_i     <= 16'd0;
+					ss_state <= SS_CHAIN;
+				end
+				SS_CHAIN: begin
+					ss_acc <= ss_i[2:0] == 3'd7 ? 8'd0 : ss_acc_now;
+					if (ss_chain_last) begin
+						ss_i     <= 16'd0;
+						ss_state <= ss_save ? SS_HEADER : SS_POST;
+					end
+				end
+				SS_HEADER:
+					if (ss_i == 16'd7) begin
+						ss_i     <= 16'd0;
+						ss_state <= SS_POST;
+					end
+				SS_POST:
+					if (ss_i == 16'(SETTLE - 1)) begin
+						ss_state <= SS_IDLE;
+						if (ss_save) begin
+							state_ok      <= 1'b1;
+							state_present <= 1'b1;
+							state_refused <= 1'b0;
+						end else begin
+							ss_loaded <= 1'b1;
+						end
+					end
+				default: ss_state <= SS_IDLE;
+			endcase
+			// A new ROM or a new file: nothing known about the slot until
+			// the file's header is checked.
+			if (load_start || state_file_start) begin
+				state_ok      <= 1'b0;
+				state_present <= 1'b0;
+				state_refused <= 1'b0;
+			end
+		end
+	end
 
 	// =========================================================================
 	// Video: crop to 240 lines x 160 pixels, each pixel written twice.
@@ -503,7 +866,7 @@ module atari2600_gamebub #(
 			fb_vblank   <= 1'b1;
 			fb_hblank   <= 1'b1;
 			de_count    <= 2'd0;
-		end else if (core_ce_pix) begin
+		end else if (core_ce_pix && !ss_hold) begin   // see "Save state"
 			prev_vsync  <= core_vsync;
 			prev_hblank <= core_hblank;
 			fb_hblank   <= core_hblank;

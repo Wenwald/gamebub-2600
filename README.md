@@ -56,14 +56,25 @@ first paddle instead: Left/Right move it (slowly at first, faster the
 longer you hold), and A/B/X/Y is the paddle's button. The paddle starts
 centered for each ROM.
 
-**Menu:** Reset (power cycle; multicarts advance to the next game), Left
-and Right Difficulty (A/B), TV Type (Colour/B&W), Bankswitch override,
-Superchip (with a forced scheme), and Controller (Joystick/Paddle).
-Overrides apply after a Reset.
+**Menu:** Reset (power cycle; multicarts advance to the next game), Save
+State, Load State, Left and Right Difficulty (A/B), TV Type (Colour/B&W),
+Bankswitch override, Superchip (with a forced scheme), and Controller
+(Joystick/Paddle). Overrides apply after a Reset.
 
 The game pauses while the menu is open. Setting changes take effect when
 you close the menu. Reset blanks the screen, and the game starts over when
 you close the menu.
+
+**Save states:** one per game. Save State keeps the moment the menu was
+opened; Load State goes back to it (the screen blanks, and the game goes on
+when you close the menu). The state is kept next to the ROM as
+`<rom name>.state` and is written to the SD card when you leave the core
+or the Game Bub turns off (including its automatic shutdown on a low
+battery), not when you save: if it crashes or loses power suddenly first,
+that session's save is lost. A state loads only into the ROM it was saved from,
+with the same Bankswitch and Superchip settings; otherwise Load State does
+nothing. A state may not load after a core update. The firmware also
+leaves an empty `.state` file next to each ROM you play.
 
 ## Compatibility
 
