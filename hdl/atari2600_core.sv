@@ -134,23 +134,23 @@ module atari2600_core
 	logic           maria_RDY;
 	logic           halt_n;
 	logic           maria_drive_AB;
-	logic [15:0]    maria_AB_out;
+	logic [15:0]    maria_addr;
 	logic           tia_RDY;
 	logic           tia_RDY_seen_high;
-	logic [3:0]     audv0, audv1;
+	logic [3:0]     tia_vol0, tia_vol1;
 	logic           RDY;
 	logic [15:0]    cpu_AB;
 	logic           cpu_halt_n;
-	logic           maria_en;
-	logic           lock_ctrl;
-	logic           bios_en_b;
-	logic [1:0]     ctrl_writes;
-	logic           tia_en;
+	logic           inptctrl_maria;
+	logic           inptctrl_lock;
+	logic           inptctrl_ext;
+	logic [1:0]     inptctrl_writes;
+	logic           inptctrl_tia;
 	logic [7:0]     read_DB;
 	logic [7:0]     write_DB;
 	logic           bus_stuff_valid;
 	logic [7:0]     bus_stuff_data;
-	wire  [7:0]     physical_write_DB = tia_en && bus_stuff_valid ?
+	wire  [7:0]     physical_write_DB = inptctrl_tia && bus_stuff_valid ?
 		(write_DB & bus_stuff_data) : write_DB;
 	logic [7:0]     tia_DB_out, riot_DB_out, maria_DB_out, cart_DB_out;
 	logic [7:0]     tia_DB_oe, riot_DB_oe, maria_DB_oe, cart_DB_oe;
@@ -173,7 +173,7 @@ module atari2600_core
 	logic           RW;
 
 	// Save-state chain, in order: MARIA, phase controller, TIA, paddles,
-	// video_mux, RIOT, CPU, INPUTCTRL, cartridge, then this module's own
+	// video_mux, RIOT, CPU, INPTCTRL, cartridge, then this module's own
 	// registers.
 	logic ss_maria, ss_phase, ss_tia, ss_paddle_a, ss_paddle_b, ss_mux, ss_riot,
 	      ss_cpu, ss_ctrl, ss_cart, ss_c1, ss_c2, ss_c3;
@@ -187,7 +187,7 @@ module atari2600_core
 	wire tia_clock_after_reset = cpu_driver && bypass_bios && tia_mode;
 	wire effective_reset = reset | reset_hold;
 	wire phase_source_request_tia = cpu_driver && !effective_reset &&
-		ctrl_writes == 2'd2 && tia_en;
+		inptctrl_writes == 2'd2 && inptctrl_tia;
 	wire first_phase_is_phi1 = bypass_bios && tia_mode &&
 		!tia_clock_after_reset;
 
@@ -226,8 +226,8 @@ module atari2600_core
 		if (ss_en) {ss_c2, tia_RDY_seen_high} <= {tia_RDY_seen_high, ss_c1};
 	end
 
-	assign RDY = maria_RDY && tia_RDY && (~tia_en || tia_RDY_seen_high);
-	assign cpu_halt_n = (ctrl_writes == 2'd2) ? halt_n : 1'b1;
+	assign RDY = maria_RDY && tia_RDY && (~inptctrl_tia || tia_RDY_seen_high);
+	assign cpu_halt_n = (inptctrl_writes == 2'd2) ? halt_n : 1'b1;
 
 	wire [7:0] DB = cpu_DB_oe ? physical_write_DB : read_DB;
 
@@ -243,9 +243,9 @@ module atari2600_core
 	always_comb begin
 		case ({cpu_AB_oe, maria_drive_AB})
 			2'b00 : AB = last_address;
-			2'b01 : AB = maria_AB_out;
+			2'b01 : AB = maria_addr;
 			2'b10 : AB = cpu_AB;
-			2'b11 : AB = cpu_AB & maria_AB_out;
+			2'b11 : AB = cpu_AB & maria_addr;
 		endcase
 		RW = cpu_RW_oe ? cpu_rwn : 1'b1;
 
@@ -288,7 +288,7 @@ module atari2600_core
 	maria maria_inst(
 `else
 	assign maria_drive_AB = 1'b0;
-	assign maria_AB_out   = 16'd0;
+	assign maria_addr     = 16'd0;
 	assign maria_DB_out   = 8'd0;
 	assign maria_DB_oe    = 8'd0;
 	assign cs_ram0        = 1'b0;
@@ -329,7 +329,7 @@ module atari2600_core
 		.mclk1          (mclk1),
 		.tia_clk_x2     (tia_clk_x2),
 		.AB_in          (AB),
-		.AB_out         (maria_AB_out),
+		.AB_out         (maria_addr),
 		.drive_AB       (maria_drive_AB),
 		.hide_border    (1'b0),
 		.bypass_bios    (bypass_bios),
@@ -343,7 +343,7 @@ module atari2600_core
 		.pclk1          (pclk1_m),
 		.pclk2          (pclk0),
 		.RW             (RW),
-		.maria_en       (maria_en),
+		.maria_en       (inptctrl_maria),
 		.YC             (),
 		.cs_ram0        (cs_ram0),
 		.cs_ram1        (cs_ram1),
@@ -379,7 +379,7 @@ module atari2600_core
 		.pclk1          (r_pclk1),
 		.pclk2          (pclk0),
 		.RW             (RW),
-		.maria_en       (maria_en),
+		.maria_en       (inptctrl_maria),
 		.YC             (),
 		.cs_ram0        (r_cs_ram0),
 		.cs_ram1        (r_cs_ram1),
@@ -440,7 +440,7 @@ module atari2600_core
 		.phi2           (pclk0),
 		.RW_n           (RW),
 		.rdy            (tia_RDY),
-		.addr           ({(AB[5] & tia_en), AB[4:0]}),
+		.addr           ({(AB[5] & inptctrl_tia), AB[4:0]}),
 		.d_in           (physical_write_DB),
 		.d_out          (tia_DB_out),
 		.d_out_oe       (tia_DB_oe),
@@ -448,8 +448,8 @@ module atari2600_core
 		.i_out          (tia_i_out),
 		.i4             (fire_n[0]),
 		.i5             (fire_n[1]),
-		.aud0           (audv0),
-		.aud1           (audv1),
+		.aud0           (tia_vol0),
+		.aud1           (tia_vol1),
 		.col            (tia_chroma),
 		.lum            (tia_luma),
 		.BLK_n          (),
@@ -545,7 +545,7 @@ module atari2600_core
 	end
 
 	// TIA audio through the non-linear mixing table (top.sv:578-594). Mono:
-	// both channels carry audv0 + audv1, as upstream does with stereo off.
+	// both channels carry tia_vol0 + tia_vol1, as upstream does with stereo off.
 	logic [15:0] audio_lut[32];
 	assign audio_lut = '{
 		16'h0000, 16'h0842, 16'h0FFF, 16'h1745, 16'h1E1D, 16'h2492, 16'h2AAA, 16'h306E,
@@ -553,7 +553,7 @@ module atari2600_core
 		16'h590A, 16'h5C97, 16'h5FFF, 16'h6343, 16'h6665, 16'h6968, 16'h6C4D, 16'h6F17,
 		16'h71C6, 16'h745C, 16'h76DA, 16'h7942, 16'h7B95, 16'h7DD3, 16'h7FFF, 16'hFFFF
 	};
-	wire [4:0] aud_index = audv0 + audv1;
+	wire [4:0] aud_index = tia_vol0 + tia_vol1;
 	assign audio_l = audio_lut[aud_index];
 	assign audio_r = audio_lut[aud_index];
 
@@ -620,20 +620,21 @@ module atari2600_core
 		.ss_so        (ss_cpu)
 	);
 
-	ctrl_reg ctrl
+	// INPTCTRL ($01): our own register (hdl/inptctrl.sv).
+	inptctrl ctrl
 	(
 		.clk          (clk_sys),
 		.pclk0        (pclk0),
-		.d_in         (write_DB[3:0]),
+		.data         (write_DB[3:0]),
 		.cs           (cs_tia),
-		.latch_b      (RW | lock_ctrl),
-		.rst          (effective_reset),
-		.lock_out     (lock_ctrl),
+		.write_n      (RW | inptctrl_lock),
+		.reset        (effective_reset),
+		.lock         (inptctrl_lock),
 		.bypass_bios  (bypass_bios),
-		.maria_en_out (maria_en),
-		.bios_en_out  (bios_en_b),
-		.tia_en_out   (tia_en),
-		.writes       (ctrl_writes),
+		.maria_en     (inptctrl_maria),
+		.ext          (inptctrl_ext),
+		.tia_en       (inptctrl_tia),
+		.write_count  (inptctrl_writes),
 		.tia_mode     (tia_mode),
 		.ss_en        (ss_en),
 		.ss_si        (ss_cpu),
@@ -727,14 +728,14 @@ module atari2600_core
 		.ddr_timeout    (1'b0),
 		.d_out          (cart_DB_out),
 		.d_in           (cart_din),
-		.a_in           ({AB[12] & bios_en_b, AB[11:0]}),
+		.a_in           ({AB[12] & inptctrl_ext, AB[11:0]}),
 		.rw             (RW),
 		.reset          (effective_reset),
 		.clk            (clk_sys),
 		.ce             (cart_ce_2600),
 		.phi1           (pclk1),
 		.phi2           (pclk0),
-		.arm_driver_run (lock_ctrl && tia_en),
+		.arm_driver_run (inptctrl_lock && inptctrl_tia),
 		.sc             (mapper_sc),
 		.mapper         (mapper),
 		.mapper_revision(mapper_revision),

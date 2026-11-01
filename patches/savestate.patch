@@ -22,10 +22,11 @@
 # Left off the chain: cpuclk and lfsr_6_instant in TIA.sv (never
 # instantiated), the ARM schemes (not built: NO_ARM_MAPPER), video_mux's
 # blend frame store and the registers only blend uses (the core ties blend
-# off; on the chain they would keep the 64 KB store in the bitstream), and
-# the 7800 parts of top.sv. Instances in cpuclk and in top.sv's Atari7800 module
-# (neither is elaborated here) leave the new ports unconnected, which lint
-# reports as PINMISSING; a 7800 build would connect Atari7800's.
+# off; on the chain they would keep the 64 KB store in the bitstream). The
+# instances in cpuclk (never elaborated here) leave the new ports
+# unconnected, which lint reports as PINMISSING. top.sv's Atari7800 module
+# and ctrl_reg are not vendored (scripts/vendor_upstream.py); the INPTCTRL
+# register is our hdl/inptctrl.sv, with the same chain bits as ctrl_reg had.
 #
 --- a/rtl/6502/mos6502_ctl.sv
 +++ b/rtl/6502/mos6502_ctl.sv
@@ -2599,7 +2600,7 @@
  endmodule
 --- a/rtl/top.sv
 +++ b/rtl/top.sv
-@@ -1134,7 +1134,11 @@
+@@ -19,7 +19,11 @@
  	output logic active_tia,
  	output logic edge_source_tia,
  	output logic source_stable,
@@ -2612,7 +2613,7 @@
  );
  
  	typedef enum logic [1:0] {
-@@ -1236,6 +1240,9 @@
+@@ -121,6 +125,9 @@
  				end
  			end
  		endcase
@@ -2622,29 +2623,7 @@
  	end
  
  endmodule
-@@ -1255,7 +1262,11 @@
- 	output logic       maria_en_out,
- 	output logic       bios_en_out,
- 	output logic       tia_en_out,
--	output logic [1:0] writes
-+	output logic [1:0] writes,
-+	// Save-state chain: while ss_en, every register shifts one place.
-+	input  logic       ss_en,
-+	input  logic       ss_si,
-+	output logic       ss_so
- );
- 
- 	always_ff @(posedge clk) begin
-@@ -1283,6 +1294,8 @@
- 			if (writes < 2'd2)
- 				writes <= writes + 1'b1;
- 		end
-+		if (ss_en) {ss_so, lock_out, maria_en_out, bios_en_out, tia_en_out, wrote_once, writes} <=
-+			{lock_out, maria_en_out, bios_en_out, tia_en_out, wrote_once, writes, ss_si};
- 	end
- endmodule
- 
-@@ -1305,9 +1318,15 @@
+@@ -146,9 +153,15 @@
  	output        RD,        // read enable
  	output        AB_OE,     // 0 while halted: A0-A15 released
  	output        RW_OE,     // 0 while halted: R/W released
@@ -2661,7 +2640,7 @@
  	// The source controller removes MARIA restart and source-handoff hazards.
  	// Keep this local pairing gate as the CPU pin invariant: an unexpected
  	// duplicate phase must never advance SALLY or any returned system phase.
-@@ -1318,6 +1337,7 @@
+@@ -159,6 +172,7 @@
  	always_ff @(posedge clk_sys) begin
  		if      (phi1_en) in_phase2 <= 1'b1;
  		else if (phi2_en) in_phase2 <= 1'b0;
@@ -2669,7 +2648,7 @@
  	end
  
  	// SALLY pin 39 is the system clock - TIA, RIOT, both cartridge slots and
-@@ -1357,7 +1377,11 @@
+@@ -198,7 +212,11 @@
  		.jammed   (),
  
  		.dbg_a (), .dbg_x (), .dbg_y (), .dbg_s (),

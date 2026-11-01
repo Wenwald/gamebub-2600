@@ -6,7 +6,7 @@
 # third_party/atari7800_mister/ (same paths as upstream). The set is exactly
 # the upstream entries of hdl/core.f, plus the palette prepare_rtl.py
 # generates from and upstream's LICENSE. Files are unmodified except for
-# REDACTIONS (data we must not publish, unused by this core), which are
+# REDACTIONS (data or code we must not publish, unused by this core), which are
 # applied by this script and so reproducible from upstream. PROVENANCE
 # records the upstream commit and each file's SHA-256 (and, for a redacted
 # file, the upstream file's SHA-256).
@@ -51,7 +51,24 @@ def redact_riot_loader(text):
     return text[:m.start(1)] + first + '\n' + rest + text[m.end(1):]
 
 
-REDACTIONS = {'rtl/RIOT/M6532.sv': redact_riot_loader}
+def redact_top(text):
+    """top.sv: remove the Atari7800 module (the 7800 console, never elaborated
+    by this core) and ctrl_reg (INPTCTRL, replaced by our hdl/inptctrl.sv).
+    Each leaves one marker line; the modules this core uses
+    (cpu_phase_controller, M6502C) stay as they are."""
+    marker = '// %s removed by gamebub-2600 (scripts/vendor_upstream.py): not used here\n'
+    for name, pattern in (
+            ('module Atari7800', r'^module Atari7800 #\(\n.*?^endmodule\n'),
+            ('module ctrl_reg', r'^// INPUTCTRL register\. Uses TIA CS\.\nmodule ctrl_reg\n.*?^endmodule\n')):
+        found = list(re.finditer(pattern, text, re.S | re.M))
+        if len(found) != 1:
+            raise SystemExit('top.sv: %s not found exactly once; review the redaction' % name)
+        m = found[0]
+        text = text[:m.start()] + marker % name + text[m.end():]
+    return text
+
+
+REDACTIONS = {'rtl/RIOT/M6532.sv': redact_riot_loader, 'rtl/top.sv': redact_top}
 
 
 def wanted():
@@ -127,8 +144,9 @@ def update(checkout):
             f.write(vendored_content(os.path.join(checkout, rel), rel))
     with open(PROVENANCE, 'w') as f:
         f.write('# Files from Atari7800_MiSTer (MIT, see LICENSE), unmodified except\n'
-                '# the "redacted" ones (data unused by this core, zeroed by\n'
-                '# scripts/vendor_upstream.py; the line gives the upstream SHA-256).\n'
+                '# the "redacted" ones (data or code unused by this core, zeroed or\n'
+                '# removed by scripts/vendor_upstream.py; the line gives the upstream\n'
+                '# SHA-256).\n'
                 '# Our changes are in patches/, applied by scripts/prepare_rtl.py to a\n'
                 '# copy in build/. Written by scripts/vendor_upstream.py; do not edit.\n'
                 'url %s\ncommit %s\n' % (URL, commit))

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Mark Schlosser
 //
-// detect2600: cartridge bank-switching scheme detector. Clean-room design,
-// written only from docs/detection-spec.md (section numbers below refer to
+// detect2600: cartridge bank-switching scheme detector.
+// Written only from docs/detection-spec.md (section numbers below refer to
 // it); no emulator source was consulted.
 //
 // How it works
