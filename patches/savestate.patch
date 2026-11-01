@@ -27,6 +27,9 @@
 # unconnected, which lint reports as PINMISSING. top.sv's Atari7800 module
 # and ctrl_reg are not vendored (scripts/vendor_upstream.py); the INPTCTRL
 # register is our hdl/inptctrl.sv, with the same chain bits as ctrl_reg had.
+# Nor are mapper_AR, mapper_JANE and video_mux's pause pixel clocks: chain
+# stages of the same length stand in their places (ss_pad_*), so the state
+# format stays the same.
 #
 --- a/rtl/6502/mos6502_ctl.sv
 +++ b/rtl/6502/mos6502_ctl.sv
@@ -522,63 +525,7 @@
  	end
  	assign rom_a = {bank, a_in[10:0]};
  
-@@ -921,7 +1009,11 @@
- 	input   [1:0]   tape_in,
- 	input           fix_sc_cs,
- 	output  logic   audio_data,
--	input   [18:0]  rom_size
-+	input   [18:0]  rom_size,
-+	// Save-state chain: while ss_en, every register shifts one place.
-+	input           ss_en,
-+	input           ss_si,
-+	output logic    ss_so
- );
- 	// These numbers represent ONE HALF the cycles
- 	// needed to achieve 340us for a 1 bit, and 227us for a 0 bit.
-@@ -1226,6 +1318,42 @@
- 			we_cycle <= '0;
- 			//rom_en <= 1;
- 		end
-+		if (ss_en) {ss_so,
-+			audio_data, fetch_byte, playback, audio_timer, eq_tone, state_count,
-+			bit_position, current_bit, header_a, pre_fetch_byte, page_position,
-+			bank_a, tape_num, state, state_next, page_count, block_checksum, audio_buffer,
-+			cooldown, we_cycle, bank, ram_we, we_byte, header_array[0], header_array[1],
-+			header_array[2], header_array[3], header_array[4], header_array[5],
-+			header_array[6], header_array[7], block_byte_array[0], block_byte_array[1],
-+			block_byte_array[2], block_byte_array[3], block_byte_array[4], block_byte_array[5],
-+			block_byte_array[6], block_byte_array[7], block_byte_array[8], block_byte_array[9],
-+			block_byte_array[10], block_byte_array[11], block_byte_array[12], block_byte_array[13],
-+			block_byte_array[14], block_byte_array[15], block_byte_array[16], block_byte_array[17],
-+			block_byte_array[18], block_byte_array[19], block_byte_array[20], block_byte_array[21],
-+			block_byte_array[22], block_byte_array[23], cs_array[0], cs_array[1],
-+			cs_array[2], cs_array[3], cs_array[4], cs_array[5], cs_array[6], cs_array[7],
-+			cs_array[8], cs_array[9], cs_array[10], cs_array[11], cs_array[12],
-+			cs_array[13], cs_array[14], cs_array[15], cs_array[16], cs_array[17],
-+			cs_array[18], cs_array[19], cs_array[20], cs_array[21], cs_array[22],
-+			cs_array[23]} <=
-+			{audio_data, fetch_byte, playback, audio_timer, eq_tone, state_count,
-+			bit_position, current_bit, header_a, pre_fetch_byte, page_position,
-+			bank_a, tape_num, state, state_next, page_count, block_checksum, audio_buffer,
-+			cooldown, we_cycle, bank, ram_we, we_byte, header_array[0], header_array[1],
-+			header_array[2], header_array[3], header_array[4], header_array[5],
-+			header_array[6], header_array[7], block_byte_array[0], block_byte_array[1],
-+			block_byte_array[2], block_byte_array[3], block_byte_array[4], block_byte_array[5],
-+			block_byte_array[6], block_byte_array[7], block_byte_array[8], block_byte_array[9],
-+			block_byte_array[10], block_byte_array[11], block_byte_array[12], block_byte_array[13],
-+			block_byte_array[14], block_byte_array[15], block_byte_array[16], block_byte_array[17],
-+			block_byte_array[18], block_byte_array[19], block_byte_array[20], block_byte_array[21],
-+			block_byte_array[22], block_byte_array[23], cs_array[0], cs_array[1],
-+			cs_array[2], cs_array[3], cs_array[4], cs_array[5], cs_array[6], cs_array[7],
-+			cs_array[8], cs_array[9], cs_array[10], cs_array[11], cs_array[12],
-+			cs_array[13], cs_array[14], cs_array[15], cs_array[16], cs_array[17],
-+			cs_array[18], cs_array[19], cs_array[20], cs_array[21], cs_array[22],
-+			cs_array[23],
-+			ss_si};
- 	end
- 
- endmodule
-@@ -1246,7 +1374,11 @@
+@@ -917,7 +1005,11 @@
  	output  [17:0]  ram_a,
  	output  [18:0]  rom_a,
  	// special
@@ -591,7 +538,7 @@
  );
  	logic [2:0] bank_config;
  	logic [3:0] pending_switch;
-@@ -1295,6 +1427,10 @@
+@@ -966,6 +1058,10 @@
  			pending_switch <= 0;
  			banks <= bank_lut[0];
  		end
@@ -602,7 +549,7 @@
  	end
  endmodule
  
-@@ -1314,7 +1450,11 @@
+@@ -985,7 +1081,11 @@
  	output  [17:0]  ram_a,
  	output  [18:0]  rom_a,
  	// special
@@ -615,7 +562,7 @@
  );
  	assign flags_out = 16'd0;
  	assign d_out = 8'd0;
-@@ -1347,6 +1487,7 @@
+@@ -1018,6 +1118,7 @@
  			ram_bank <= 4'd0;
  			ram_en <= 0;
  		end
@@ -623,7 +570,7 @@
  	end
  
  	assign rom_a = {current_bank, a_in[10:0]};
-@@ -1367,7 +1508,11 @@
+@@ -1038,7 +1139,11 @@
  	output          ram_sel,
  	output          ram_rw,
  	output  [17:0]  ram_a,
@@ -636,7 +583,7 @@
  );
  	assign flags_out = 16'd0;
  	assign d_out = 8'd0;
-@@ -1386,6 +1531,7 @@
+@@ -1057,6 +1162,7 @@
  
  		if (reset)
  			bank <= 3'd0;
@@ -644,7 +591,7 @@
  	end
  
  	assign rom_a = {bank, a_in[11:0]};
-@@ -1406,7 +1552,11 @@
+@@ -1077,7 +1183,11 @@
  	output          ram_sel,
  	output          ram_rw,
  	output  [17:0]  ram_a,
@@ -657,7 +604,7 @@
  );
  	assign flags_out = 16'd0;
  	assign d_out = 8'd0;
-@@ -1425,6 +1575,7 @@
+@@ -1096,6 +1206,7 @@
  
  		if (reset)
  			bank <= 0;
@@ -665,7 +612,7 @@
  	end
  
  	assign rom_a = {bank, a_in[11:0]};
-@@ -1445,7 +1596,11 @@
+@@ -1142,7 +1253,11 @@
  	output          ram_sel,
  	output          ram_rw,
  	output  [17:0]  ram_a,
@@ -678,28 +625,7 @@
  );
  	assign flags_out = 16'd0;
  	assign d_out = 8'd0;
-@@ -1468,6 +1623,7 @@
- 		end
- 		if (reset)
- 			bank <= 2'd1;
-+		if (ss_en) {ss_so, bank} <= {bank, ss_si};
- 	end
- 
- 	assign rom_a = {2'd0, bank, a_in[11:0]};
-@@ -1512,7 +1668,11 @@
- 	output          ram_sel,
- 	output          ram_rw,
- 	output  [17:0]  ram_a,
--	output  [18:0]  rom_a
-+	output  [18:0]  rom_a,
-+	// Save-state chain: while ss_en, every register shifts one place.
-+	input           ss_en,
-+	input           ss_si,
-+	output logic    ss_so
- );
- 	assign flags_out = 16'd0;
- 	assign d_out = 8'd0;
-@@ -1528,6 +1688,7 @@
+@@ -1158,6 +1273,7 @@
  			bank <= a_in[6];
  		if (reset)
  			bank <= 0;
@@ -707,7 +633,7 @@
  	end
  
  	assign rom_a = {6'd0, bank, a_in[11:0]};
-@@ -1555,7 +1716,11 @@
+@@ -1185,7 +1301,11 @@
  	output  [17:0]  ram_a,
  	output  [18:0]  rom_a,
  	// special
@@ -720,7 +646,7 @@
  );
  	assign flags_out = 16'd0;
  	assign d_out = 8'd0;
-@@ -1585,6 +1750,7 @@
+@@ -1215,6 +1335,7 @@
  			lo <= 0;
  			hi <= 0;
  		end
@@ -728,7 +654,7 @@
  	end
  
  	assign rom_a = {4'd0, bank, a_in[11:0]};
-@@ -1609,7 +1775,11 @@
+@@ -1239,7 +1360,11 @@
  	output  [17:0]  ram_a,
  	output  [18:0]  rom_a,
  	// special
@@ -741,7 +667,7 @@
  );
  	assign flags_out = 16'd0;
  	assign d_out = 8'd0;
-@@ -1629,6 +1799,7 @@
+@@ -1259,6 +1384,7 @@
  		end
  		if (reset)
  			bank <= big ? 6'd1 : 6'd15;
@@ -749,7 +675,7 @@
  	end
  
  	assign rom_a = {1'b0, bank, a_in[11:0]};
-@@ -1656,7 +1827,11 @@
+@@ -1286,7 +1412,11 @@
  	output  [18:0]  rom_a,
  	// special
  	input           load_start,
@@ -762,7 +688,7 @@
  );
  	assign flags_out = 16'd0;
  	assign d_out = 8'd0;
-@@ -1694,6 +1869,7 @@
+@@ -1324,6 +1454,7 @@
  		end
  		if (reset)
  			bank <= 1;
@@ -772,12 +698,13 @@
  	generate
 --- a/rtl/cart2600.sv
 +++ b/rtl/cart2600.sv
-@@ -116,8 +116,29 @@
+@@ -115,9 +115,30 @@
+ 
  	// Tape Signals
  	output          tape_audio, // Tape audio output
- 	input    [1:0]  tape_in,    // ADC tape input
--	input           fix_sc_cs   // Fix Supercharger Checksums menu option
-+	input           fix_sc_cs,  // Fix Supercharger Checksums menu option
+-	input    [1:0]  tape_in     // ADC tape input
++	input    [1:0]  tape_in,    // ADC tape input
+ 	// fix_sc_cs port removed by gamebub-2600 (scripts/vendor_upstream.py): not used here
 +
 +	// Save states. While ss_hold the FA2 work RAM belongs to ss_mem_* (q one
 +	// clock after the address); while ss_en every register shifts one place
@@ -803,7 +730,7 @@
  	`define NUM_MAPPERS BANKEND
  
  	// Muxxing signals
-@@ -246,10 +267,12 @@
+@@ -248,10 +269,12 @@
  			access_taken <= 1'b0;
  		else if (phi2)
  			access_taken <= 1'b1;
@@ -816,7 +743,7 @@
  	end
  
  	// Bank CTY is compatible with F4 minus the ARM enhanced music
-@@ -269,7 +292,10 @@
+@@ -271,7 +294,10 @@
  		.ram_a      (ram_a[BANKCTY]),
  		.rom_a      (rom_addr[BANKCTY]),
  		.ce         (ce),
@@ -828,7 +755,7 @@
  	);
  
  	logic [5:0] cdf_table_index;
-@@ -562,6 +588,7 @@
+@@ -564,6 +590,7 @@
  			load_end_d <= 1'b0;
  		else
  			load_end_d <= load_end;
@@ -836,7 +763,7 @@
  	end
  
  	assign table_family = mapper == BANKBUS ? 2'd1 :
-@@ -1012,7 +1039,10 @@
+@@ -1014,7 +1041,10 @@
  		.ram_sel    (ram_sel[BANKF8]),
  		.ram_rw     (ram_rw[BANKF8]),
  		.ram_a      (ram_a[BANKF8]),
@@ -848,7 +775,7 @@
  	);
  
  	mapper_F6 mapper_F6
-@@ -1029,7 +1059,10 @@
+@@ -1031,7 +1061,10 @@
  		.ram_sel    (ram_sel[BANKF6]),
  		.ram_rw     (ram_rw[BANKF6]),
  		.ram_a      (ram_a[BANKF6]),
@@ -860,7 +787,7 @@
  	);
  
  	mapper_FE mapper_FE
-@@ -1047,7 +1080,10 @@
+@@ -1049,7 +1082,10 @@
  		.ram_rw     (ram_rw[BANKFE]),
  		.ram_a      (ram_a[BANKFE]),
  		.rom_a      (rom_addr[BANKFE]),
@@ -872,7 +799,7 @@
  	);
  
  	mapper_E0 mapper_E0
-@@ -1064,7 +1100,10 @@
+@@ -1066,7 +1102,10 @@
  		.ram_sel    (ram_sel[BANKE0]),
  		.ram_rw     (ram_rw[BANKE0]),
  		.ram_a      (ram_a[BANKE0]),
@@ -884,7 +811,7 @@
  	);
  
  	mapper_3F mapper_3F
-@@ -1081,7 +1120,10 @@
+@@ -1083,7 +1122,10 @@
  		.ram_sel    (ram_sel[BANK3F]),
  		.ram_rw     (ram_rw[BANK3F]),
  		.ram_a      (ram_a[BANK3F]),
@@ -896,7 +823,7 @@
  	);
  
  	mapper_F4 mapper_F4
-@@ -1098,7 +1140,10 @@
+@@ -1100,7 +1142,10 @@
  		.ram_sel    (ram_sel[BANKF4]),
  		.ram_rw     (ram_rw[BANKF4]),
  		.ram_a      (ram_a[BANKF4]),
@@ -908,7 +835,7 @@
  	);
  
  	mapper_P2 mapper_P2
-@@ -1116,7 +1161,10 @@
+@@ -1118,7 +1163,10 @@
  		.ram_rw     (ram_rw[BANKP2]),
  		.ram_a      (ram_a[BANKP2]),
  		.rom_a      (rom_addr[BANKP2]),
@@ -920,7 +847,7 @@
  	);
  
  	mapper_FA mapper_FA
-@@ -1133,7 +1181,10 @@
+@@ -1135,7 +1183,10 @@
  		.ram_sel    (ram_sel[BANKFA]),
  		.ram_rw     (ram_rw[BANKFA]),
  		.ram_a      (ram_a[BANKFA]),
@@ -932,7 +859,7 @@
  	);
  
  	mapper_fa2 mapper_FA2
-@@ -1157,7 +1208,15 @@
+@@ -1159,7 +1210,15 @@
  		.nvram_wdata   (fa2_nvram_wdata_raw),
  		.nvram_rdata   (fa2_nvram_rdata),
  		.nvram_ready   (fa2_nvram_ready),
@@ -949,7 +876,7 @@
  	);
  	assign ram_sel[BANKFA2] = 1'b0;
  	assign ram_rw[BANKFA2] = 1'b1;
-@@ -1214,7 +1273,10 @@
+@@ -1216,7 +1275,10 @@
  		.rom_a      (rom_addr[BANKUA]),
  		// UASW (Mickey) swaps the two bank-select addresses. Carried on the
  		// revision like DPC+'s stable_fractional; revision 0 is plain UA.
@@ -961,7 +888,7 @@
  	);
  
  	mapper_E7 mapper_E7
-@@ -1231,7 +1293,10 @@
+@@ -1233,7 +1295,10 @@
  		.ram_sel    (ram_sel[BANKE7]),
  		.ram_rw     (ram_rw[BANKE7]),
  		.ram_a      (ram_a[BANKE7]),
@@ -973,7 +900,7 @@
  	);
  
  	mapper_F0 mapper_F0
-@@ -1248,7 +1313,10 @@
+@@ -1250,7 +1315,10 @@
  		.ram_sel    (ram_sel[BANKF0]),
  		.ram_rw     (ram_rw[BANKF0]),
  		.ram_a      (ram_a[BANKF0]),
@@ -985,7 +912,7 @@
  	);
  
  	mapper_32 mapper_32
-@@ -1266,7 +1334,10 @@
+@@ -1268,7 +1336,10 @@
  		.ram_rw     (ram_rw[BANK32]),
  		.ram_a      (ram_a[BANK32]),
  		.rom_a      (rom_addr[BANK32]),
@@ -996,20 +923,20 @@
 +		.ss_so      (ss_mapper_32)
  	);
  
- 	mapper_AR mapper_AR
-@@ -1290,7 +1361,10 @@
- 		.rom_size   (rom_size[18:0]),
- 		.audio_data (tape_audio),
- 		.tape_in    (tape_in),
--		.fix_sc_cs  (fix_sc_cs)
-+		.fix_sc_cs  (fix_sc_cs),
-+		.ss_en      (ss_en),
-+		.ss_si      (ss_mapper_32),
-+		.ss_so      (ss_mapper_AR)
- 	);
+ 	// mapper_AR instance removed by gamebub-2600 (scripts/vendor_upstream.py): not used here
+@@ -1283,6 +1354,11 @@
+ 	assign rom_addr[BANKAR]  = '0;
+ 	assign ar_read           = 1'b0;
+ 	assign tape_audio        = 1'b0;
++	// Save-state chain: AR held 574 chain bits here. Placeholder stages of the
++	// same length keep the state format unchanged; they feed nothing else.
++	logic [572:0] ss_pad_AR;
++	always @(posedge clk)
++		if (ss_en) {ss_mapper_AR, ss_pad_AR} <= {ss_pad_AR, ss_mapper_32};
  
  	mapper_WD mapper_WD
-@@ -1309,7 +1383,10 @@
+ 	(
+@@ -1300,7 +1376,10 @@
  		.ram_a      (ram_a[BANKWD]),
  		.rom_a      (rom_addr[BANKWD]),
  		// An 8195-byte dump carries banks 2 and 3 swapped; detect2600 flags it.
@@ -1021,7 +948,7 @@
  	);
  
  	mapper_3E mapper_3E
-@@ -1327,7 +1404,10 @@
+@@ -1318,7 +1397,10 @@
  		.ram_rw     (ram_rw[BANK3E]),
  		.ram_a      (ram_a[BANK3E]),
  		.rom_a      (rom_addr[BANK3E]),
@@ -1033,7 +960,7 @@
  	);
  
  	mapper_SB mapper_SB
-@@ -1344,7 +1424,10 @@
+@@ -1335,7 +1417,10 @@
  		.ram_sel    (ram_sel[BANKSB]),
  		.ram_rw     (ram_rw[BANKSB]),
  		.ram_a      (ram_a[BANKSB]),
@@ -1045,7 +972,7 @@
  	);
  
  	mapper_EF mapper_EF
-@@ -1361,7 +1444,10 @@
+@@ -1352,7 +1437,10 @@
  		.ram_sel    (ram_sel[BANKEF]),
  		.ram_rw     (ram_rw[BANKEF]),
  		.ram_a      (ram_a[BANKEF]),
@@ -1057,7 +984,7 @@
  	);
  
  	mapper_0840 mapper_0840
-@@ -1378,7 +1464,10 @@
+@@ -1369,7 +1457,10 @@
  		.ram_sel    (ram_sel[BANK0840]),
  		.ram_rw     (ram_rw[BANK0840]),
  		.ram_a      (ram_a[BANK0840]),
@@ -1069,7 +996,7 @@
  	);
  
  	mapper_FC mapper_FC
-@@ -1396,7 +1485,10 @@
+@@ -1387,7 +1478,10 @@
  		.ram_rw     (ram_rw[BANKFC]),
  		.ram_a      (ram_a[BANKFC]),
  		.rom_a      (rom_addr[BANKFC]),
@@ -1081,7 +1008,7 @@
  	);
  
  	mapper_DF mapper_DF
-@@ -1414,7 +1506,10 @@
+@@ -1405,7 +1499,10 @@
  		.ram_rw     (ram_rw[BANKDF]),
  		.ram_a      (ram_a[BANKDF]),
  		.rom_a      (rom_addr[BANKDF]),
@@ -1093,7 +1020,7 @@
  	);
  
  	mapper_MC #(.SLICE(0)) mapper_MC_MC2K
-@@ -1433,7 +1528,10 @@
+@@ -1424,7 +1521,10 @@
  		.ram_a      (ram_a[BANKMC2K]),
  		.rom_a      (rom_addr[BANKMC2K]),
  		.load_start (load_start),
@@ -1105,7 +1032,7 @@
  	);
  
  	mapper_MC #(.SLICE(1)) mapper_MC_MC4K
-@@ -1452,7 +1550,10 @@
+@@ -1443,7 +1543,10 @@
  		.ram_a      (ram_a[BANKMC4K]),
  		.rom_a      (rom_addr[BANKMC4K]),
  		.load_start (load_start),
@@ -1117,7 +1044,7 @@
  	);
  
  	mapper_MC #(.SLICE(2)) mapper_MC_MC8K
-@@ -1471,7 +1572,10 @@
+@@ -1462,7 +1565,10 @@
  		.ram_a      (ram_a[BANKMC8K]),
  		.rom_a      (rom_addr[BANKMC8K]),
  		.load_start (load_start),
@@ -1128,17 +1055,16 @@
 +		.ss_so      (ss_mapper_MC_MC8K)
  	);
  
- 	mapper_JANE mapper_JANE
-@@ -1488,7 +1592,10 @@
- 		.ram_sel    (ram_sel[BANKJANE]),
- 		.ram_rw     (ram_rw[BANKJANE]),
- 		.ram_a      (ram_a[BANKJANE]),
--		.rom_a      (rom_addr[BANKJANE])
-+		.rom_a      (rom_addr[BANKJANE]),
-+		.ss_en      (ss_en),
-+		.ss_si      (ss_mapper_MC_MC8K),
-+		.ss_so      (ss_mapper_JANE)
- 	);
+ 	// mapper_JANE instance removed by gamebub-2600 (scripts/vendor_upstream.py): not used here
+@@ -1474,5 +1580,10 @@
+ 	assign ram_rw[BANKJANE]    = 1'b1;
+ 	assign ram_a[BANKJANE]     = '0;
+ 	assign rom_addr[BANKJANE]  = '0;
++	// Save-state chain: JANE held 3 chain bits here. Placeholder stages of
++	// the same length keep the state format unchanged; they feed nothing else.
++	logic [1:0] ss_pad_JANE;
++	always @(posedge clk)
++		if (ss_en) {ss_mapper_JANE, ss_pad_JANE} <= {ss_pad_JANE, ss_mapper_MC_MC8K};
  
  endmodule
 --- a/rtl/mapper_fa2.sv
@@ -2683,15 +2609,20 @@
  logic [23:0] out_color, nwarm_color, ncool_color, nhot_color,
  	pwarm_color, pcool_color, phot_color, custom_color, old_color;
  
-@@ -57,6 +66,7 @@
- always @(posedge clk_sys) begin
- 	pix_ce_paused_maria <= ~pix_ce_paused_maria;
- 	pix_ce_paused_tia <= pix_ce_paused_tia + 2'd1;
-+	if (ss_en) {ss_c1, pix_ce_paused_maria, pix_ce_paused_tia} <= {pix_ce_paused_maria, pix_ce_paused_tia, ss_si};
- end
- wire pix_ce_paused = is_maria ? pix_ce_paused_maria : pix_ce_paused_tia[1];
- wire pix_ce_immediate = pause ? pix_ce_paused : pix_ce_normal;
-@@ -178,6 +188,14 @@
+@@ -53,6 +62,12 @@
+ 
+ wire pix_ce_immediate = is_maria ? maria_pix_ce : tia_pix_ce;
+ // Pause pixel clocks removed by gamebub-2600 (scripts/vendor_upstream.py): not used here
++// Save-state chain: the pause pixel clocks held 3 chain bits here.
++// Placeholder stages of the same length keep the state format unchanged;
++// they feed nothing else.
++logic [2:0] ss_pad_pause;
++always @(posedge clk_sys)
++	if (ss_en) {ss_c1, ss_pad_pause} <= {ss_pad_pause, ss_si};
+ logic pix_ce_delayed;
+ logic [7:0] yuv_index;
+ logic [7:0][1:0] last_color;
+@@ -171,6 +186,14 @@
  		hsync <= is_maria ? maria_hsync : tia_hsync;
  		hblank <= is_maria ? maria_hblank : tia_hblank;
  	end

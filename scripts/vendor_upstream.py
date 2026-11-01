@@ -68,7 +68,61 @@ def redact_top(text):
     return text
 
 
-REDACTIONS = {'rtl/RIOT/M6532.sv': redact_riot_loader, 'rtl/top.sv': redact_top}
+MARKER = '// %s removed by gamebub-2600 (scripts/vendor_upstream.py): not used here\n'
+
+
+def replace_each_once(path, text, cuts):
+    """Apply (name, pattern, replacement) cuts in order; each pattern must
+    match exactly once (re.S | re.M)."""
+    for name, pattern, replacement in cuts:
+        found = list(re.finditer(pattern, text, re.S | re.M))
+        if len(found) != 1:
+            raise SystemExit('%s: %s not found exactly once; review the redaction' % (path, name))
+        m = found[0]
+        text = text[:m.start()] + replacement + text[m.end():]
+    return text
+
+
+def redact_banks(text):
+    """banks2600.sv: remove mapper_AR (Supercharger) and mapper_JANE, which
+    this core does not support. Each leaves one marker line."""
+    return replace_each_once('banks2600.sv', text, [
+        (name, r'^module %s\n\(\n.*?^endmodule\n' % name, MARKER % ('module ' + name))
+        for name in ('mapper_AR', 'mapper_JANE')])
+
+
+def redact_cart(text):
+    """cart2600.sv: remove the mapper_AR and mapper_JANE instances (the
+    modules are redacted from banks2600.sv) and the fix_sc_cs port that only
+    mapper_AR used. patches/atari7800_mister.patch ties the two schemes off
+    as unsupported."""
+    return replace_each_once('cart2600.sv', text, [
+        ('fix_sc_cs port',
+         r'^\tinput    \[1:0\]  tape_in,    // ADC tape input\n'
+         r'\tinput           fix_sc_cs   // Fix Supercharger Checksums menu option\n',
+         '\tinput    [1:0]  tape_in     // ADC tape input\n'
+         '\t' + MARKER % 'fix_sc_cs port'),
+    ] + [
+        ('%s instance' % name, r'^\t%s %s\n\t\(\n.*?^\t\);\n' % (name, name),
+         '\t' + MARKER % (name + ' instance'))
+        for name in ('mapper_AR', 'mapper_JANE')])
+
+
+def redact_video_mux(text):
+    """video_mux.sv: remove the pixel clocks shown while paused (this core
+    ties pause off); pix_ce_immediate is the selected pixel clock again."""
+    return replace_each_once('video_mux.sv', text, [(
+        'pause pixel clocks',
+        r'^wire pix_ce_normal = is_maria \? maria_pix_ce : tia_pix_ce;\n'
+        r'logic \[1:0\] pix_ce_paused_tia;\n.*?'
+        r'^wire pix_ce_immediate = pause \? pix_ce_paused : pix_ce_normal;\n',
+        'wire pix_ce_immediate = is_maria ? maria_pix_ce : tia_pix_ce;\n'
+        + MARKER % 'Pause pixel clocks')])
+
+
+REDACTIONS = {'rtl/RIOT/M6532.sv': redact_riot_loader, 'rtl/top.sv': redact_top,
+              'rtl/banks2600.sv': redact_banks, 'rtl/cart2600.sv': redact_cart,
+              'rtl/video_mux.sv': redact_video_mux}
 
 
 def wanted():

@@ -15,35 +15,37 @@
 #     so the first game is game 0 even when the scheme is already selected
 #     (manually) during the load. Upstream cleared it only while another
 #     scheme was selected.
+#   - Supercharger (AR) and JANE are not supported (scripts/vendor_upstream.py
+#     removes their mappers): like the ARM schemes they show the
+#     unsupported-cartridge screen, and the AR tape outputs are tied off.
 #
-# rtl/TIA.sv, rtl/banks2600.sv, rtl/paddles.sv (Vivado 2026.1 synthesis, no
-# behaviour change):
+# rtl/TIA.sv, rtl/paddles.sv (Vivado 2026.1 synthesis, no behaviour change):
 #   - TIA outputs i_out, col, lum, paddle_read, and paddles.sv's
 #     paddle_select.select and paddle_timer.charged, become `output logic`:
 #     they are assigned in always blocks, and an untyped output port is a
 #     net, which Vivado rejects (Quartus and Verilator accept it).
-#   - mapper_AR: header_array.sum() (an array reduction method Vivado
-#     synthesis does not support) written out as the 8-bit sum of its eight
-#     elements, which is what .sum() returns for 8-bit elements.
 #
 --- a/rtl/cart2600.sv
 +++ b/rtl/cart2600.sv
-@@ -145,8 +145,14 @@
+@@ -145,8 +145,16 @@
  
  	assign rom_mask = rom_size[18:0] - 1'd1;
  	assign rom_read = mapper == BANKAR ? ar_read : ~address_change;
 +`ifdef NO_ARM_MAPPER
 +	// Without the ARM, every Harmony/Melody ARM scheme is unsupported.
 +	wire is_bad_game = mapper == BANKELF || mapper == BANKDPCP ||
-+		mapper == BANKCDF || mapper == BANKBUS;
++		mapper == BANKCDF || mapper == BANKBUS ||
++		mapper == BANKAR || mapper == BANKJANE;
 +`else
  	wire is_bad_game = mapper == BANKELF ||
- 		(mapper == BANKBUS && mapper_revision == 3'd0);
+-		(mapper == BANKBUS && mapper_revision == 3'd0);
++		(mapper == BANKBUS && mapper_revision == 3'd0) ||
++		mapper == BANKAR || mapper == BANKJANE;
 +`endif
  
  	// Handle unsupportable ARM mappers :(
  	spram #(
-@@ -586,6 +592,7 @@
+@@ -586,6 +594,7 @@
  	assign table_pointer_write_value = mapper == BANKCDF ?
  		cdf_pointer_update_value : bus_pointer_update_value;
  
@@ -51,7 +53,7 @@
  	arm_mapper_tables stream_tables (
  		.clk_sys                (clk),
  		.family                 (table_family),
-@@ -865,6 +872,83 @@
+@@ -865,6 +874,83 @@
  		(mapper == BANKCDF ? cdf_call_stack : bus_call_stack);
  	assign arm_call_thumb = mapper == BANKDPCP ? dpc_call_thumb :
  		(mapper == BANKCDF ? cdf_call_thumb : bus_call_thumb);
@@ -135,7 +137,7 @@
  
  	// ELF is not an ARM7 mapper; retain the explicit unsupported screen.
  	assign direct_do[BANKELF]     = bg_data;
-@@ -1182,7 +1266,7 @@
+@@ -1182,10 +1268,21 @@
  		.ram_rw     (ram_rw[BANK32]),
  		.ram_a      (ram_a[BANK32]),
  		.rom_a      (rom_addr[BANK32]),
@@ -143,7 +145,35 @@
 +		.cold_reset (mapper != BANK32 || load_start)
  	);
  
- 	mapper_AR mapper_AR
+ 	// mapper_AR instance removed by gamebub-2600 (scripts/vendor_upstream.py): not used here
++	// Supercharger (AR) is not supported: the unsupported-cartridge screen
++	// (is_bad_game), no tape.
++	assign direct_do[BANKAR] = bg_data;
++	assign flags_out[BANKAR] = 16'd1;
++	assign out_en[BANKAR]    = 8'hFF;
++	assign ram_sel[BANKAR]   = 1'b0;
++	assign ram_rw[BANKAR]    = 1'b1;
++	assign ram_a[BANKAR]     = '0;
++	assign rom_addr[BANKAR]  = '0;
++	assign ar_read           = 1'b0;
++	assign tape_audio        = 1'b0;
+ 
+ 	mapper_WD mapper_WD
+ 	(
+@@ -1369,5 +1466,13 @@
+ 	);
+ 
+ 	// mapper_JANE instance removed by gamebub-2600 (scripts/vendor_upstream.py): not used here
++	// JANE is not supported: the unsupported-cartridge screen (is_bad_game).
++	assign direct_do[BANKJANE] = bg_data;
++	assign flags_out[BANKJANE] = 16'd1;
++	assign out_en[BANKJANE]    = 8'hFF;
++	assign ram_sel[BANKJANE]   = 1'b0;
++	assign ram_rw[BANKJANE]    = 1'b1;
++	assign ram_a[BANKJANE]     = '0;
++	assign rom_addr[BANKJANE]  = '0;
+ 
+ endmodule
 --- a/rtl/TIA.sv
 +++ b/rtl/TIA.sv
 @@ -1730,13 +1730,13 @@
@@ -172,18 +202,6 @@
  );
  
  logic [7:0] wreg[64]; // Write registers. Only 44 are used.
---- a/rtl/banks2600.sv
-+++ b/rtl/banks2600.sv
-@@ -1097,7 +1097,8 @@
- 						state_next <= AR_LOAD_HEADER;
- 					end else begin
- 						header_a <= 0;
--						header_array[4] <= 8'h55 - header_array.sum();
-+						header_array[4] <= 8'h55 - (header_array[0] + header_array[1] + header_array[2] + header_array[3] +
-+							header_array[4] + header_array[5] + header_array[6] + header_array[7]);
- 						state_next <= AR_LOAD_BLOCK_BYTE;
- 					end
- 					state <= AR_FETCH;
 --- a/rtl/paddles.sv
 +++ b/rtl/paddles.sv
 @@ -5,7 +5,7 @@

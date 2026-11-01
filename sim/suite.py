@@ -70,7 +70,7 @@ GAMEBUB_ROM_MAX = 65536  # hdl/gamebub/atari2600_gamebub.sv ROM_ADDR_WIDTH = 16
 
 # Mapper numbers: the bss_type enum in hdl/detect2600.sv.
 M = dict(F8=1, F6=2, FE=3, E0=4, F3F=5, F4=6, P2=7, FA=8, CV=9, K2=10, UA=11,
-         E7=12, F0=13, M32=14, F3E=16, SB=17, WD=18, EF=19, JANE=20, CTY=22,
+         E7=12, F0=13, M32=14, AR=15, F3E=16, SB=17, WD=18, EF=19, JANE=20, CTY=22,
          FA2=25, X0840=26, FC=27, DF=28, MC2K=29, MC4K=30, MC8K=31)
 
 # ROM -> (mapper, Superchip expected from detection)
@@ -87,10 +87,19 @@ BANKSWITCH = {
     'bs_bf': (M['DF'], False), 'bs_bfsc': (M['DF'], True),
     'bs_sb128': (M['SB'], False), 'bs_sb256': (M['SB'], False),
     'bs_ua': (M['UA'], False), 'bs_0840': (M['X0840'], False),
-    'bs_jane': (M['JANE'], False), 'bs_cty': (M['CTY'], False),
+    'bs_cty': (M['CTY'], False),
     'bs_f0': (M['F0'], False), 'bs_2k': (M['K2'], False), 'bs_cv': (M['CV'], False),
     'bs_e7': (M['E7'], False), 'bs_3e': (M['F3E'], False), 'bs_fe': (M['FE'], False),
     'bs_wd': (M['WD'], False), 'bs_fc': (M['FC'], False), 'bs_p2': (M['P2'], False),
+}
+
+# Schemes this core does not support: name -> (ROM, mapper, detected).
+# Forced, the ROM must show the Out of Order screen, never green; if
+# detected, auto-detection must still name the scheme (hdl/detect2600.sv
+# is unchanged) and show the same screen. bs_jane is a working JANE image.
+UNSUPPORTED = {
+    'bs_jane': ('bs_jane', M['JANE'], True),
+    'ar': ('bs_f8', M['AR'], False),
 }
 
 # Multicarts: ROM -> (mapper, games). Each reset must advance to the next
@@ -282,6 +291,25 @@ def check_multicart(rom, mapper, games):
     rc, got, _ = run(rom, 3)
     want = 'mapper %d' % mapper
     return mapping, (got == want, got if got == want else 'got %s, want %s' % (got, want))
+
+
+def check_unsupported(name, rom, mapper, detected):
+    def screen(px):
+        if not px:
+            return False, 'simulation failed'
+        if px[-1] != OUT_OF_ORDER:
+            return False, 'status %06x, not Out of Order' % px[-1]
+        return True, 'Out of Order'
+    _, _, px = run(rom, 10, ('--mapper', str(mapper)))
+    forced = screen(px)
+    if not detected:
+        return forced, (True, 'n/a: not detected')
+    _, got, px = run(rom, 10)
+    want = 'mapper %d' % mapper
+    if got != want:
+        return forced, (False, 'got %s, want %s' % (got, want))
+    ok, info = screen(px)
+    return forced, (ok, want + ', ' + info)
 
 
 def check_arm_unsupported():
@@ -660,6 +688,7 @@ def main(argv):
     print('%-10s %-22s %s' % ('rom', 'mapping (forced)', 'detection (auto)'))
     checks = [(rom, check_bankswitch, exp) for rom, exp in BANKSWITCH.items()]
     checks += [(rom, check_multicart, exp) for rom, exp in MULTICART.items()]
+    checks += [(name, check_unsupported, exp) for name, exp in UNSUPPORTED.items()]
     gaps, issues = [], []
     for rom, fn, exp in checks:
         if only and rom not in only:

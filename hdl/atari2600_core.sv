@@ -816,7 +816,6 @@ module atari2600_core
 		.oe             (cart_DB_oe),
 		.tape_audio     (),
 		.tape_in        (2'd0),
-		.fix_sc_cs      (1'b0),
 		.ss_hold        (ss_hold),
 		.ss_en          (ss_en),
 		.ss_si          (ss_ctrl),
