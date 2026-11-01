@@ -81,7 +81,7 @@ leaves an empty `.state` file next to each ROM you play.
 Works:
 - NTSC games up to 64 KB using the joystick or one paddle: 2K/4K and the common
   bank-switching schemes (F8, F6, F4, FA, E0, FE, 3F, 3E, E7, F0, UA, CV,
-  P2, EF, WD, FC, 0840, JANE, CTY, FA2 without saves, 32-in-1, MC
+  P2, EF, WD, FC, 0840, CTY, FA2 without saves, 32-in-1, MC
   multicarts),
   with or without Superchip RAM.
 - Scheme auto-detection. Schemes it cannot detect (32-in-1,
@@ -97,7 +97,7 @@ Not supported in this version:
   are refused with an error.
 - ARM-based cartridges (DPC+, CDF, BUS: many modern homebrews). They show
   a blank screen instead of upstream's "Out of Order" message.
-- Supercharger (AR) games.
+- Supercharger (AR) and JANE games. They show a blank screen.
 - 7800 games: this port contains only the 2600 side of Atari7800_MiSTer.
 
 ## What's next
@@ -106,7 +106,7 @@ Ideas, roughly in order; no promises or dates:
 - ROMs larger than 64 KB, loaded into the Game Bub's external memory.
 - PAL and SECAM ROMs, with a choice of palette.
 - Saves for the cartridge types that have them (FA2, CTY).
-- Supercharger games, once the provenance of upstream's BIOS image is clear.
+- Supercharger games.
 - A second player, if the Game Bub's controls allow it.
 - Eventually, 7800 games.
 

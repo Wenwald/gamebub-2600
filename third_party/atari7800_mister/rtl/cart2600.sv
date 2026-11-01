@@ -115,8 +115,8 @@ module cart2600
 
 	// Tape Signals
 	output          tape_audio, // Tape audio output
-	input    [1:0]  tape_in,    // ADC tape input
-	input           fix_sc_cs   // Fix Supercharger Checksums menu option
+	input    [1:0]  tape_in     // ADC tape input
+	// fix_sc_cs port removed by gamebub-2600 (scripts/vendor_upstream.py): not used here
 );
 	`define NUM_MAPPERS BANKEND
 
@@ -1185,29 +1185,7 @@ module cart2600
 		.cold_reset (mapper != BANK32)
 	);
 
-	mapper_AR mapper_AR
-	(
-		.clk        (clk),
-		.reset      (reset || mapper != BANKAR),
-		.a_change   (address_change),
-		.sc         (sc),
-		.a_in       (a_in),
-		.d_in       (d_in),
-		.d_out      (direct_do[BANKAR]),
-		.flags_out  (flags_out[BANKAR]),
-		.oe         (out_en[BANKAR]),
-		.ram_sel    (ram_sel[BANKAR]),
-		.ram_rw     (ram_rw[BANKAR]),
-		.ram_a      (ram_a[BANKAR]),
-		.rom_a      (rom_addr[BANKAR]),
-		.ce         (ce),
-		.ar_read    (ar_read),
-		.rom_do     (rom_do),
-		.rom_size   (rom_size[18:0]),
-		.audio_data (tape_audio),
-		.tape_in    (tape_in),
-		.fix_sc_cs  (fix_sc_cs)
-	);
+	// mapper_AR instance removed by gamebub-2600 (scripts/vendor_upstream.py): not used here
 
 	mapper_WD mapper_WD
 	(
@@ -1390,21 +1368,6 @@ module cart2600
 		.rom_size   (rom_size)
 	);
 
-	mapper_JANE mapper_JANE
-	(
-		.clk        (clk),
-		.reset      (reset),
-		.a_change   (address_change),
-		.sc         (sc),
-		.a_in       (a_in),
-		.d_in       (d_in),
-		.d_out      (direct_do[BANKJANE]),
-		.flags_out  (flags_out[BANKJANE]),
-		.oe         (out_en[BANKJANE]),
-		.ram_sel    (ram_sel[BANKJANE]),
-		.ram_rw     (ram_rw[BANKJANE]),
-		.ram_a      (ram_a[BANKJANE]),
-		.rom_a      (rom_addr[BANKJANE])
-	);
+	// mapper_JANE instance removed by gamebub-2600 (scripts/vendor_upstream.py): not used here
 
 endmodule
