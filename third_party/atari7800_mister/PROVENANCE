@@ -1,6 +1,7 @@
 # Files from Atari7800_MiSTer (MIT, see LICENSE), unmodified except
-# the "redacted" ones (data unused by this core, zeroed by
-# scripts/vendor_upstream.py; the line gives the upstream SHA-256).
+# the "redacted" ones (data or code unused by this core, zeroed or
+# removed by scripts/vendor_upstream.py; the line gives the upstream
+# SHA-256).
 # Our changes are in patches/, applied by scripts/prepare_rtl.py to a
 # copy in build/. Written by scripts/vendor_upstream.py; do not edit.
 url https://github.com/MiSTer-devel/Atari7800_MiSTer
@@ -22,6 +23,7 @@ ed8ca7013ddbd6f7b0abe9d6fa2b70c3c42d411aff206fe443726c1fa4a446f7  rtl/cart2600.s
 e8325049b158040322a931e522333c8116323e5b6bf54828170a743e35c25277  rtl/mapper_fa2.sv
 77f601e03864a372c5e10318923580e685c7d41c18502e09623c5c721eb38f29  rtl/paddles.sv
 8a977c0bcd1d325347d3f54cd4cdb41d230f0d360036013521b21b9c60103055  rtl/palettes/NWARM.hex
-f126f6e32be907f86cd91392f963a9555ca1c3600713efc902530e9cd10fc3a3  rtl/top.sv
+a92031cbeea94df5e4160a25c309371534b498a7c22303a7224af1dfac0a69be  rtl/top.sv
 0cf2df3ba5cda17816beb6b155d8553c324a868205d4e0f135545531b41168f8  rtl/video_mux.sv
 redacted 0e246d55bc77eb74610258d7e2dbbf34508aff1580f792a1235e88320416fcfe  rtl/RIOT/M6532.sv
+redacted f126f6e32be907f86cd91392f963a9555ca1c3600713efc902530e9cd10fc3a3  rtl/top.sv

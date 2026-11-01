@@ -3,11 +3,12 @@
 //
 // Synthesis sources for hdl/atari2600_core.sv, in compile order. Paths are
 // relative to the repo root. Upstream files come from build/upstream (the
-// patched copy made by scripts/prepare_rtl.py). top.sv supplies M6502C,
-// ctrl_reg and cpu_phase_controller (its Atari7800 module is never
-// elaborated). mapper_fa2.sv is the non-ARM FA2 scheme. paddles.sv supplies
+// patched copy made by scripts/prepare_rtl.py). top.sv supplies M6502C and
+// cpu_phase_controller (its Atari7800 module and ctrl_reg are not vendored).
+// hdl/inptctrl.sv is our INPTCTRL register (implemented from the 7800
+// Software Guide). mapper_fa2.sv is the non-ARM FA2 scheme. paddles.sv supplies
 // paddle_timer (its other modules are never elaborated). hdl/detect2600.sv
-// is our cartridge detector (clean-room, docs/detection-spec.md); it also
+// is our own cartridge detector (written from docs/detection-spec.md); it also
 // declares the bss_type enum the cartridge files use, so it comes early.
 // hdl/atari2600_savestate.sv is the save-state package the core and the
 // Game Bub wrapper share.
@@ -35,5 +36,6 @@ build/upstream/rtl/cart2600.sv
 build/upstream/rtl/banks2600.sv
 build/upstream/rtl/top.sv
 hdl/atari2600_savestate.sv
+hdl/inptctrl.sv
 hdl/maria_2600.sv
 hdl/atari2600_core.sv
