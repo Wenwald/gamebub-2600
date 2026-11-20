@@ -3,7 +3,7 @@
 # Copyright (c) 2026 Mark Schlosser
 #
 # Check that hdl/gamebub/atari2600_gamebub.sv has exactly the ports (name,
-# direction, width) and parameters that the framework's bindExtModule expects
+# direction, signedness, width) and parameters that the framework's bindExtModule expects
 # for chisel/src/atari2600/HandheldAtari2600.scala. The framework prints that
 # Verilog template when Chisel runs; a mismatch would otherwise only show up
 # in Vivado, an hour into a build.
@@ -21,7 +21,7 @@ import sys
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 WRAPPER = os.path.join(ROOT, 'hdl', 'gamebub', 'atari2600_gamebub.sv')
 MODULE = 'atari2600_gamebub'
-PORT = re.compile(r'^\s*(input|output)\s+(?:wire\s+)?logic\s*(\[(\d+):0\])?\s*(\w+)\s*,?\s*(//.*)?$')
+PORT = re.compile(r'^\s*(input|output)\s+(?:wire\s+)?logic\s*(signed\s*)?(\[(\d+):0\])?\s*(\w+)\s*,?\s*(//.*)?$')
 PARAM = re.compile(r'^\s*parameter\s+(?:int|real|string)?\s*(\w+)')
 
 
@@ -35,7 +35,8 @@ def parse(header):
     for line in header.splitlines():
         m = PORT.match(line)
         if m:
-            ports[m.group(4)] = (m.group(1), int(m.group(3)) + 1 if m.group(3) else 1)
+            ports[m.group(5)] = (m.group(1) + (' signed' if m.group(2) else ''),
+                                 int(m.group(4)) + 1 if m.group(4) else 1)
             continue
         m = PARAM.match(line)
         if m:

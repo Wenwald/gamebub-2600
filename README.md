@@ -28,9 +28,7 @@ For the Game Bub rev 4. Current version: see
 
 ## Install
 
-1. Game Bub firmware **1.1.0-beta2 or later** is required for SD-card
-   cores. When switching firmware, delete `system/*.bit.hs` from the SD
-   card.
+1. This core needs Game Bub firmware **1.1.0-beta4 or later**.
 2. Download the latest `Wenwald.2600-v*.zip` from this repository's
    [Releases page](https://github.com/Wenwald/gamebub-2600/releases) and
    copy its `cores/Wenwald.2600/` folder to `/cores/` on the SD card. Keep
