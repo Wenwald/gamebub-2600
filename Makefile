@@ -46,6 +46,7 @@ bitstream: check-chisel
 
 package:
 	@echo "$(VERSION)" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-dev)?$$' && [ $$(printf %s "$(VERSION)" | wc -c) -le 16 ] || { echo "core.json version must be X.Y.Z or X.Y.Z-dev, at most 16 characters (firmware limit), got '$(VERSION)'"; exit 1; }
+	@python3 -c "import json,re,sys; v=json.load(open('$(COREDIR)/core.json')).get('min_firmware',''); sys.exit(not re.fullmatch(r'[0-9]+\.[0-9]+(\.[0-9]+)?(-[a-z]+\.?0*[1-9][0-9]*)?', v))" || { echo "core.json needs min_firmware like 1.1.0-beta.2 (firmware refuses cores without it)"; exit 1; }
 	@test -f $(BIT) || { echo "no bitstream: run make bitstream first"; exit 1; }
 	rm -rf build/package
 	mkdir -p $(PKG)
